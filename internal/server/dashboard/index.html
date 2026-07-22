@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#15251f" />
+    <title>FCP Control Deck</title>
+    <link rel="stylesheet" href="/_fcp/ui/styles.css" />
+    <script defer src="/_fcp/ui/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">본문으로 이동</a>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/_fcp/ui" aria-label="FCP 대시보드 홈">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" role="img">
+              <path d="M8 7.5h16v5H13v3h9v5h-9v5H8z" />
+              <circle cx="24.5" cy="24.5" r="3.5" />
+            </svg>
+          </span>
+          <span>
+            <strong>FCP</strong>
+            <small>CONTROL DECK</small>
+          </span>
+        </a>
+        <div class="topbar-actions">
+          <span class="connection-pill"><i aria-hidden="true"></i>LOCAL</span>
+          <button class="reset-workload-button" id="reset-workload-button" type="button" aria-label="테스트 데이터 비우기">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />
+            </svg>
+            <span>테스트 데이터 비우기</span>
+          </button>
+          <button class="refresh-button" id="refresh-button" type="button" aria-label="새로고침">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" />
+            </svg>
+            <span>새로고침</span>
+          </button>
+        </div>
+      </header>
+
+      <main id="main-content">
+        <section class="hero" aria-labelledby="page-title">
+          <div>
+            <p class="eyebrow">LOCAL CLOUD, CLEAR STATE</p>
+            <h1 id="page-title">지금 로컬 클라우드에서<br />무슨 일이 일어나는지.</h1>
+            <p class="hero-copy">FCP가 에뮬레이션하는 서비스와 저장된 리소스를 한 화면에서 확인합니다.</p>
+          </div>
+          <div class="project-panel">
+            <span>ACTIVE PROJECT</span>
+            <strong id="project-name">불러오는 중</strong>
+            <small id="updated-at">상태를 확인하고 있습니다.</small>
+          </div>
+        </section>
+
+        <section class="summary-grid" id="summary-grid" aria-label="FCP 상태 요약" aria-busy="true">
+          <article class="summary-card is-loading"></article>
+          <article class="summary-card is-loading"></article>
+          <article class="summary-card is-loading"></article>
+        </section>
+
+        <section class="workspace" aria-label="서비스 탐색기">
+          <aside class="service-sidebar">
+            <div class="sidebar-heading">
+              <span>SERVICES</span>
+              <small id="service-total">—</small>
+            </div>
+            <nav class="service-nav" id="service-nav" aria-label="클라우드 서비스"></nav>
+          </aside>
+
+          <div class="resource-panel">
+            <div class="resource-toolbar">
+              <div class="resource-heading">
+                <span class="section-kicker" id="section-kicker">OVERVIEW</span>
+                <h2 id="section-title">서비스 상태</h2>
+                <p id="section-description">구현된 서비스와 리소스를 확인합니다.</p>
+              </div>
+              <div class="toolbar-actions">
+                <div class="service-actions" id="service-actions"></div>
+                <label class="search-box" for="resource-search">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="11" cy="11" r="6.5" />
+                    <path d="m16 16 4 4" />
+                  </svg>
+                  <span class="sr-only">리소스 검색</span>
+                  <input id="resource-search" type="search" aria-label="리소스 검색" placeholder="이름, 종류, 상태 검색" autocomplete="off" />
+                  <kbd>/</kbd>
+                </label>
+              </div>
+            </div>
+
+            <div class="panel-status" id="panel-status" role="status" aria-live="polite">상태를 불러오는 중입니다.</div>
+            <div class="resource-content" id="resource-content"></div>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <p>Secret payload, 개인키, DynamoDB 아이템, AI 프롬프트와 생성 결과는 표시하지 않습니다.</p>
+        <span>FCP · Local development only</span>
+      </footer>
+    </div>
+
+    <dialog class="confirm-dialog" id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+      <div class="dialog-mark" aria-hidden="true">!</div>
+      <div class="dialog-copy">
+        <span>LOCAL DATA ACTION</span>
+        <h2 id="confirm-title">테스트 데이터를 비울까요?</h2>
+        <p id="confirm-description">구조와 로컬 키를 유지하고 테스트 중 생성된 데이터만 삭제합니다.</p>
+      </div>
+      <div class="dialog-actions">
+        <button class="dialog-cancel" id="dialog-cancel" type="button">취소</button>
+        <button class="dialog-confirm" id="dialog-confirm" type="button">데이터 비우기</button>
+      </div>
+    </dialog>
+    <dialog class="create-dialog" id="create-dialog" aria-labelledby="create-title" aria-describedby="create-description">
+      <form class="create-form" id="create-form" aria-busy="false">
+        <div class="create-dialog-heading">
+          <div class="create-dialog-mark" aria-hidden="true">+</div>
+          <div>
+            <span>LOCAL RESOURCE</span>
+            <h2 id="create-title">리소스 만들기</h2>
+            <p id="create-description">로컬 data directory에 저장할 리소스를 설정합니다.</p>
+          </div>
+        </div>
+        <div class="create-fields" id="create-fields"></div>
+        <p class="create-error" id="create-error" role="alert" tabindex="-1" hidden></p>
+        <div class="dialog-actions create-dialog-actions">
+          <button class="dialog-cancel" id="create-cancel" type="button">취소</button>
+          <button class="create-submit" id="create-submit" type="submit">만들기</button>
+        </div>
+      </form>
+    </dialog>
+    <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>

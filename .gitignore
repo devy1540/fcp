@@ -1,0 +1,6 @@
+.fcp/
+bin/
+coverage.out
+node_modules/
+.gradle/
+build/

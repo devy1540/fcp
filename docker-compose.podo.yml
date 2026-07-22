@@ -1,0 +1,42 @@
+services:
+  fcp:
+    build: .
+    command: ["--listen", "0.0.0.0:4566", "--gcp-listen", "0.0.0.0:8085", "--data-dir", "/data", "--profile", "podo", "--project", "podo-local"]
+    ports: ["4566:4566", "8085:8085"]
+    volumes: ["fcp-data:/data"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:4566/_fcp/health"]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: podo
+      MYSQL_USER: podo
+      MYSQL_PASSWORD: podo
+      MYSQL_ROOT_PASSWORD: local-root
+    ports: ["3306:3306"]
+    volumes: ["mysql-data:/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-upodo", "-ppodo"]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 1s
+      retries: 20
+
+volumes:
+  fcp-data:
+  mysql-data:
+  redis-data:

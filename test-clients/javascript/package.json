@@ -1,0 +1,16 @@
+{
+  "name": "fcp-javascript-compatibility",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1092.0",
+    "@aws-sdk/client-sqs": "3.1092.0",
+    "@aws-sdk/lib-storage": "3.1092.0",
+    "@aws-sdk/s3-request-presigner": "3.1092.0",
+    "@google-cloud/pubsub": "4.11.0",
+    "@google-cloud/storage": "7.19.0"
+  }
+}
