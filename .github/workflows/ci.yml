@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Core and race tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: go test -count=1 ./...
+      - run: go test -count=1 -race ./...
+      - run: go vet ./...
+      - run: node --check internal/server/dashboard/app.js
+      - run: docker compose -f docker-compose.podo.yml config -q
+
+  official-sdk:
+    name: Official SDK compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.12.0
+          run_install: false
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: 9.2.0
+      - name: Start FCP with the PODO profile
+        run: |
+          FCP_CI_DIR="$RUNNER_TEMP/fcp-ci"
+          mkdir -p "$FCP_CI_DIR"
+          go build -trimpath -o "$FCP_CI_DIR/fcp" ./cmd/fcp
+          "$FCP_CI_DIR/fcp" \
+            --listen 127.0.0.1:4566 \
+            --gcp-listen 127.0.0.1:8085 \
+            --data-dir "$FCP_CI_DIR/data" \
+            --profile podo \
+            --project podo-local \
+            --credentials-out "$FCP_CI_DIR/podo-local-credentials.json" \
+            >"$FCP_CI_DIR/fcp.log" 2>&1 &
+          echo "$!" >"$FCP_CI_DIR/fcp.pid"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4566/_fcp/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$FCP_CI_DIR/fcp.log"
+          exit 1
+      - name: Java and Kotlin PODO SDK tests
+        run: gradle -p test-clients/jvm test --no-daemon
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_REGION: ap-northeast-2
+          AWS_ENDPOINT_URL: http://127.0.0.1:4566
+          FCP_HTTP_ENDPOINT: http://127.0.0.1:4566
+          FCP_GCP_ENDPOINT: 127.0.0.1:8085
+          GOOGLE_GEMINI_BASE_URL: http://127.0.0.1:4566
+          GOOGLE_API_KEY: fcp-local
+      - name: JavaScript PODO SDK tests
+        working-directory: test-clients/javascript
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_REGION: ap-northeast-2
+          AWS_ENDPOINT_URL: http://127.0.0.1:4566
+          FCP_HTTP_ENDPOINT: http://127.0.0.1:4566
+          STORAGE_EMULATOR_HOST: http://127.0.0.1:4566
+          PUBSUB_EMULATOR_HOST: 127.0.0.1:8085
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/fcp-ci/podo-local-credentials.json
+      - name: Stop FCP and print logs on failure
+        if: always()
+        run: |
+          FCP_CI_DIR="$RUNNER_TEMP/fcp-ci"
+          if [ -f "$FCP_CI_DIR/fcp.pid" ]; then
+            kill "$(cat "$FCP_CI_DIR/fcp.pid")" 2>/dev/null || true
+          fi
+          if [ "${{ job.status }}" != "success" ] && [ -f "$FCP_CI_DIR/fcp.log" ]; then
+            cat "$FCP_CI_DIR/fcp.log"
+          fi

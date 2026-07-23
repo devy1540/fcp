@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
-    <meta name="theme-color" content="#15251f" />
-    <title>FCP Control Deck</title>
+    <meta name="theme-color" content="#ffffff" />
+    <title>FCP Console</title>
     <link rel="stylesheet" href="/_fcp/ui/styles.css" />
     <script defer src="/_fcp/ui/app.js"></script>
   </head>
@@ -22,11 +22,13 @@
           </span>
           <span>
             <strong>FCP</strong>
-            <small>CONTROL DECK</small>
+            <small>LOCAL CLOUD CONSOLE</small>
           </span>
         </a>
         <div class="topbar-actions">
-          <span class="connection-pill"><i aria-hidden="true"></i>LOCAL</span>
+          <span class="connection-pill" id="connection-status" data-state="connecting" role="status" aria-live="polite">
+            <i aria-hidden="true"></i><span id="connection-label">연결 중</span>
+          </span>
           <button class="reset-workload-button" id="reset-workload-button" type="button" aria-label="테스트 데이터 비우기">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />
@@ -45,18 +47,19 @@
       <main id="main-content">
         <section class="hero" aria-labelledby="page-title">
           <div>
-            <p class="eyebrow">LOCAL CLOUD, CLEAR STATE</p>
-            <h1 id="page-title">지금 로컬 클라우드에서<br />무슨 일이 일어나는지.</h1>
-            <p class="hero-copy">FCP가 에뮬레이션하는 서비스와 저장된 리소스를 한 화면에서 확인합니다.</p>
+            <p class="eyebrow">FCP CONSOLE</p>
+            <h1 id="page-title">로컬 클라우드 리소스</h1>
+            <p class="hero-copy">AWS와 Google Cloud 호환 서비스의 상태와 검증 범위를 확인합니다.</p>
           </div>
           <div class="project-panel">
-            <span>ACTIVE PROJECT</span>
+            <span>PROJECT</span>
             <strong id="project-name">불러오는 중</strong>
             <small id="updated-at">상태를 확인하고 있습니다.</small>
           </div>
         </section>
 
         <section class="summary-grid" id="summary-grid" aria-label="FCP 상태 요약" aria-busy="true">
+          <article class="summary-card is-loading"></article>
           <article class="summary-card is-loading"></article>
           <article class="summary-card is-loading"></article>
           <article class="summary-card is-loading"></article>
@@ -68,6 +71,7 @@
               <span>SERVICES</span>
               <small id="service-total">—</small>
             </div>
+            <div class="provider-filter" id="provider-filter" role="group" aria-label="클라우드 제공자 필터"></div>
             <nav class="service-nav" id="service-nav" aria-label="클라우드 서비스"></nav>
           </aside>
 
@@ -77,6 +81,7 @@
                 <span class="section-kicker" id="section-kicker">OVERVIEW</span>
                 <h2 id="section-title">서비스 상태</h2>
                 <p id="section-description">구현된 서비스와 리소스를 확인합니다.</p>
+                <div class="verification-note" id="verification-note" aria-live="polite"></div>
               </div>
               <div class="toolbar-actions">
                 <div class="service-actions" id="service-actions"></div>
@@ -99,7 +104,7 @@
       </main>
 
       <footer>
-        <p>Secret payload, 개인키, DynamoDB 아이템, AI 프롬프트와 생성 결과는 표시하지 않습니다.</p>
+        <p>READY는 응답 가능 상태입니다. 검증 배지는 회귀 테스트 근거를 뜻하며 전체 클라우드 동등성을 의미하지 않습니다.</p>
         <span>FCP · Local development only</span>
       </footer>
     </div>

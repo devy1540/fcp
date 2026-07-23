@@ -1,8 +1,18 @@
 const state = {
   data: null,
   activeService: "overview",
+  activeProvider: "ALL",
   query: "",
   loading: false,
+  detailLoading: false,
+  detailError: "",
+  page: { service: "", resources: [], total: 0, offset: 0, limit: 25, hasPrevious: false, hasNext: false, query: "" },
+  requestSerial: 0,
+  refreshTimer: null,
+  searchTimer: null,
+  lastSuccessAt: 0,
+  failures: 0,
+  openVerification: new Set(),
   actioning: false,
   pendingAction: null,
   actionTrigger: null,
@@ -12,14 +22,18 @@ const state = {
 }
 
 const elements = {
+  connection: document.querySelector("#connection-status"),
+  connectionLabel: document.querySelector("#connection-label"),
   project: document.querySelector("#project-name"),
   updatedAt: document.querySelector("#updated-at"),
   summary: document.querySelector("#summary-grid"),
   serviceTotal: document.querySelector("#service-total"),
+  providerFilter: document.querySelector("#provider-filter"),
   nav: document.querySelector("#service-nav"),
   kicker: document.querySelector("#section-kicker"),
   title: document.querySelector("#section-title"),
   description: document.querySelector("#section-description"),
+  verification: document.querySelector("#verification-note"),
   status: document.querySelector("#panel-status"),
   content: document.querySelector("#resource-content"),
   search: document.querySelector("#resource-search"),
@@ -41,6 +55,9 @@ const elements = {
   createSubmit: document.querySelector("#create-submit"),
   toast: document.querySelector("#toast"),
 }
+
+const AUTO_REFRESH_MS = 3000
+const STALE_AFTER_MS = 10000
 
 const creatableServices = {
   s3: { label: "S3 버킷", kind: "bucket" },
@@ -116,7 +133,7 @@ function shortName(value) {
 
 function searchableText(service, resource) {
   const attributes = resource.attributes?.flatMap((attribute) => [attribute.label, attribute.value]) ?? []
-  return [service.name, service.provider, resource.name, resource.kind, resource.status, ...attributes]
+  return [service.name, service.provider, service.verification.label, service.verification.evidence, resource.name, resource.kind, resource.status, ...attributes]
     .join(" ")
     .toLocaleLowerCase("ko-KR")
 }
@@ -126,8 +143,23 @@ function matchesQuery(service, resource) {
   return !query || searchableText(service, resource).includes(query)
 }
 
-function summaryCard(index, label, value, caption) {
+function serviceResourceCount(service) {
+  return Number.isFinite(service.resourceCount) ? service.resourceCount : (service.resources?.length ?? 0)
+}
+
+function serviceMatchesQuery(service) {
+  const query = state.query.trim().toLocaleLowerCase("ko-KR")
+  if (!query) return true
+  const operations = service.verification.operations?.flatMap((operation) => [operation.name, operation.status, operation.scope]) ?? []
+  return [service.name, service.provider, service.description, service.status, service.verification.label, service.verification.evidence, ...operations]
+    .join(" ")
+    .toLocaleLowerCase("ko-KR")
+    .includes(query)
+}
+
+function summaryCard(index, label, value, caption, tone) {
   const card = createElement("article", "summary-card")
+  if (tone) card.dataset.tone = tone
   const heading = createElement("div", "summary-label")
   heading.append(createElement("span", "", label), createElement("span", "summary-index", `0${index}`))
   card.append(heading, createElement("strong", "summary-value", compactNumber(value)), createElement("small", "summary-caption", caption))
@@ -137,17 +169,46 @@ function summaryCard(index, label, value, caption) {
 function renderSummary() {
   clear(elements.summary)
   elements.summary.setAttribute("aria-busy", "false")
+  const awsResources = state.data.services
+    .filter((service) => service.provider === "AWS")
+    .reduce((sum, service) => sum + serviceResourceCount(service), 0)
+  const gcpResources = state.data.services
+    .filter((service) => service.provider === "GCP")
+    .reduce((sum, service) => sum + serviceResourceCount(service), 0)
   elements.summary.append(
-    summaryCard(1, "구현 서비스", state.data.summary.serviceCount, "AWS와 GCP 호환 인터페이스"),
-    summaryCard(2, "저장 리소스", state.data.summary.resourceCount, "현재 data directory 기준"),
-    summaryCard(3, "대기 · 캡처", state.data.summary.messageCount, "SQS, Pub/Sub, FCM 합계"),
+    summaryCard(1, "AWS 서비스", state.data.summary.awsServiceCount, `${awsResources}개 로컬 리소스`, "AWS"),
+    summaryCard(2, "GCP 서비스", state.data.summary.gcpServiceCount, `${gcpResources}개 로컬 리소스`, "GCP"),
+    summaryCard(3, "공식 SDK 검증", state.data.summary.sdkVerifiedCount, "실제 클라이언트 회귀 테스트", "SDK"),
+    summaryCard(4, "HTTP 계약 검증", state.data.summary.contractVerifiedCount, "PODO 직접 호출 경로 테스트", "CONTRACT"),
   )
 }
 
-function navButton(id, name, count) {
+function servicesForProvider() {
+  if (!state.data) return []
+  if (state.activeProvider === "ALL") return state.data.services
+  return state.data.services.filter((service) => service.provider === state.activeProvider)
+}
+
+function renderProviderFilter() {
+  clear(elements.providerFilter)
+  for (const provider of ["ALL", "AWS", "GCP"]) {
+    const count = provider === "ALL" ? state.data.services.length : state.data.services.filter((service) => service.provider === provider).length
+    const button = createElement("button", "provider-filter-button")
+    button.type = "button"
+    button.dataset.provider = provider
+    button.setAttribute("aria-pressed", String(state.activeProvider === provider))
+    button.setAttribute("aria-label", provider === "ALL" ? `전체 제공자 ${count}개 서비스` : `${provider} ${count}개 서비스`)
+    button.append(createElement("span", "", provider), createElement("small", "", String(count)))
+    button.addEventListener("click", () => selectProvider(provider))
+    elements.providerFilter.append(button)
+  }
+}
+
+function navButton(id, name, count, provider = "ALL") {
   const button = createElement("button", "service-link")
   button.type = "button"
   button.dataset.service = id
+  button.dataset.provider = provider
   if (state.activeService === id) button.setAttribute("aria-current", "page")
   button.append(
     createElement("span", "service-icon", serviceMarks[id] ?? "•"),
@@ -160,27 +221,88 @@ function navButton(id, name, count) {
 
 function renderNav() {
   clear(elements.nav)
-  const total = state.data.services.reduce((sum, service) => sum + service.resources.length, 0)
-  elements.nav.append(navButton("overview", "전체 서비스", total))
-  for (const service of state.data.services) {
-    elements.nav.append(navButton(service.id, service.name, service.resources.length))
+  const services = servicesForProvider()
+  const total = services.reduce((sum, service) => sum + serviceResourceCount(service), 0)
+  const overviewName = state.activeProvider === "ALL" ? "전체 서비스" : `${state.activeProvider} 서비스`
+  elements.nav.append(navButton("overview", overviewName, total, state.activeProvider))
+  for (const service of services) {
+    elements.nav.append(navButton(service.id, service.name, serviceResourceCount(service), service.provider))
   }
-  elements.serviceTotal.textContent = String(state.data.services.length)
+  elements.serviceTotal.textContent = state.activeProvider === "ALL" ? String(services.length) : `${services.length}/${state.data.services.length}`
 }
 
 function serviceCard(service) {
   const card = createElement("button", "service-card")
   card.type = "button"
+  card.dataset.provider = service.provider
   card.addEventListener("click", () => selectService(service.id))
 
-  const top = createElement("div", "service-card-top")
-  top.append(createElement("span", "service-icon", serviceMarks[service.id] ?? "•"), createElement("span", "provider-tag", service.provider))
-  card.append(top, createElement("h3", "", service.name), createElement("p", "", service.description))
+  const identity = createElement("div", "service-card-identity")
+  const copy = createElement("div", "service-card-copy")
+  copy.append(createElement("h3", "", service.name), createElement("p", "", service.description))
+  identity.append(createElement("span", "service-icon", serviceMarks[service.id] ?? "•"), copy)
 
-  const footer = createElement("div", "service-card-footer")
-  footer.append(createElement("span", "status-chip", service.status), createElement("span", "resource-total", `${service.resources.length} resources`))
-  card.append(footer)
+  const provider = createElement("span", "service-provider", service.provider)
+  provider.dataset.provider = service.provider
+
+  const verification = createElement("div", "service-verification")
+  verification.dataset.level = service.verification.level
+  verification.append(createElement("strong", "", service.verification.label), createElement("small", "", service.verification.evidence))
+
+  const status = createElement("span", "status-chip", service.status)
+  const resourceTotal = createElement("span", "resource-total", `${serviceResourceCount(service)} resources`)
+  card.append(identity, provider, verification, status, resourceTotal)
   return card
+}
+
+function renderVerification(service) {
+  clear(elements.verification)
+  if (!service) {
+    elements.verification.dataset.level = "OVERVIEW"
+    const summary = createElement("div", "verification-summary")
+    summary.append(
+      createElement("strong", "", "검증 기준"),
+      createElement("span", "", "READY는 실행 상태, 검증 배지는 실제 SDK 또는 PODO HTTP 계약 회귀 테스트를 뜻합니다."),
+    )
+    elements.verification.append(summary)
+    return
+  }
+  elements.verification.dataset.level = service.verification.level
+  const summary = createElement("div", "verification-summary")
+  summary.append(createElement("strong", "", service.verification.label), createElement("span", "", service.verification.evidence))
+  elements.verification.append(summary)
+
+  const operations = service.verification.operations ?? []
+  if (!operations.length) return
+  const details = createElement("details", "verification-details")
+  details.open = state.openVerification.has(service.id)
+  details.addEventListener("toggle", () => {
+    if (details.open) state.openVerification.add(service.id)
+    else state.openVerification.delete(service.id)
+  })
+  const toggle = createElement("summary", "", `검증 항목 ${operations.length}개 보기`)
+  const list = createElement("div", "verification-operation-list")
+  for (const operation of operations) {
+    const row = createElement("div", "verification-operation")
+    const identity = createElement("div")
+    identity.append(createElement("strong", "", operation.name), createElement("p", "", operation.scope))
+    const status = createElement("span", "verification-status", operation.status)
+    status.dataset.status = operation.status
+    row.append(identity, status)
+    list.append(row)
+  }
+  details.append(toggle, list)
+  const limitations = service.verification.limitations ?? []
+  if (limitations.length) {
+    const note = createElement("div", "verification-limitations")
+    note.append(createElement("strong", "", "제외 범위"))
+    const items = createElement("ul")
+    for (const limitation of limitations) items.append(createElement("li", "", limitation))
+    note.append(items)
+    details.append(note)
+  }
+  details.append(createElement("small", "verification-source", `기준: ${service.verification.source}`))
+  elements.verification.append(details)
 }
 
 function statusTone(status) {
@@ -352,43 +474,66 @@ function emptyState(mark, title, description) {
 
 function renderOverview() {
   renderServiceActions(null)
-  elements.kicker.textContent = "OVERVIEW"
-  elements.title.textContent = state.query ? "검색 결과" : "서비스 상태"
-  elements.description.textContent = state.query ? `“${state.query}”와 일치하는 전체 리소스입니다.` : "구현된 서비스와 저장된 리소스를 확인합니다."
+  renderVerification(null)
+  const allServices = servicesForProvider()
+  const services = allServices.filter(serviceMatchesQuery)
+  const resourceCount = allServices.reduce((sum, service) => sum + serviceResourceCount(service), 0)
+  elements.kicker.textContent = state.activeProvider === "ALL" ? "ALL CLOUDS" : state.activeProvider
+  elements.title.textContent = state.query ? "서비스 검색 결과" : "서비스 상태"
+  const providerDescription = state.activeProvider === "ALL" ? "AWS와 GCP" : state.activeProvider
+  elements.description.textContent = state.query ? `“${state.query}”와 일치하는 ${providerDescription} 서비스입니다.` : `${providerDescription} 호환 서비스와 검증 근거를 확인합니다.`
 
-  if (!state.query) {
-    elements.status.textContent = `${state.data.services.length}개 서비스가 로컬에서 응답할 준비가 됐습니다.`
+  elements.status.textContent = state.query
+    ? `${allServices.length}개 중 ${services.length}개 서비스를 찾았습니다.`
+    : `${services.length}개 서비스 · ${resourceCount}개 리소스 · 전체 ${state.data.summary.messageCount}개 대기/캡처`
+  if (!services.length) {
+    elements.content.append(emptyState("?", "검색 결과가 없습니다", "서비스 이름, 제공자 또는 검증 API를 다른 단어로 검색해보세요."))
+    return
+  }
+  const providers = state.activeProvider === "ALL" ? ["AWS", "GCP"] : [state.activeProvider]
+  for (const provider of providers) {
+    const providerServices = services.filter((service) => service.provider === provider)
+    if (!providerServices.length) continue
+    const section = createElement("section", "provider-section")
+    section.dataset.provider = provider
+    const heading = createElement("div", "provider-section-heading")
+    heading.append(
+      createElement("h3", "", provider === "AWS" ? "Amazon Web Services 호환" : "Google Cloud 호환"),
+      createElement("span", "", `${providerServices.length} services`),
+    )
     const grid = createElement("div", "service-grid")
-    for (const service of state.data.services) grid.append(serviceCard(service))
-    elements.content.append(grid)
-    return
+    for (const service of providerServices) grid.append(serviceCard(service))
+    section.append(heading, grid)
+    elements.content.append(section)
   }
-
-  const matches = []
-  for (const service of state.data.services) {
-    for (const resource of service.resources) {
-      if (matchesQuery(service, resource)) matches.push({ service, resource })
-    }
-  }
-  elements.status.textContent = `${matches.length}개 리소스를 찾았습니다.`
-  if (!matches.length) {
-    elements.content.append(emptyState("?", "검색 결과가 없습니다", "리소스 이름, 종류 또는 상태를 다른 단어로 검색해보세요."))
-    return
-  }
-  const list = createElement("div", "resource-list")
-  for (const match of matches) list.append(resourceRow(match.service, match.resource))
-  elements.content.append(list)
 }
 
 function renderService(service) {
   renderServiceActions(service)
-  const resources = service.resources.filter((resource) => matchesQuery(service, resource))
+  renderVerification(service)
+  const page = state.page.service === service.id ? state.page : { resources: [], total: 0, offset: 0, limit: 25, hasPrevious: false, hasNext: false }
+  const resources = page.resources
   elements.kicker.textContent = service.provider
   elements.title.textContent = service.name
   elements.description.textContent = service.description
+  if (state.detailLoading && state.page.service === service.id) {
+    elements.status.textContent = "리소스를 불러오는 중입니다."
+    elements.content.append(resourceLoadingState())
+    return
+  }
+  if (state.detailError && state.page.service === service.id) {
+    elements.status.textContent = "리소스를 불러오지 못했습니다."
+    const error = emptyState("!", "리소스 조회 오류", state.detailError)
+    const retry = createElement("button", "inline-retry", "다시 시도")
+    retry.type = "button"
+    retry.addEventListener("click", () => loadServicePage(service.id, page.offset))
+    error.querySelector("div")?.append(retry)
+    elements.content.append(error)
+    return
+  }
   elements.status.textContent = state.query
-    ? `${service.resources.length}개 중 ${resources.length}개 리소스가 검색됐습니다.`
-    : `${service.resources.length}개 리소스 · ${service.status}`
+    ? `${serviceResourceCount(service)}개 중 ${page.total}개 리소스가 검색됐습니다.`
+    : `${serviceResourceCount(service)}개 리소스 · ${service.status}`
 
   if (!resources.length) {
     const searching = Boolean(state.query)
@@ -403,7 +548,31 @@ function renderService(service) {
   }
   const list = createElement("div", "resource-list")
   for (const resource of resources) list.append(resourceRow(service, resource))
-  elements.content.append(list)
+  elements.content.append(list, paginationControls(service, page))
+}
+
+function resourceLoadingState() {
+  const list = createElement("div", "resource-list resource-list-loading")
+  for (let index = 0; index < 3; index += 1) list.append(createElement("div", "resource-row resource-row-placeholder"))
+  return list
+}
+
+function paginationControls(service, page) {
+  const controls = createElement("nav", "pagination", "")
+  controls.setAttribute("aria-label", `${service.name} 리소스 페이지`)
+  const start = page.total === 0 ? 0 : page.offset + 1
+  const end = Math.min(page.offset + page.resources.length, page.total)
+  const previous = createElement("button", "pagination-button", "이전")
+  previous.type = "button"
+  previous.disabled = !page.hasPrevious || state.detailLoading
+  previous.addEventListener("click", () => loadServicePage(service.id, Math.max(0, page.offset - page.limit)))
+  const current = createElement("span", "pagination-current", `${start}–${end} / ${page.total}`)
+  const next = createElement("button", "pagination-button", "다음")
+  next.type = "button"
+  next.disabled = !page.hasNext || state.detailLoading
+  next.addEventListener("click", () => loadServicePage(service.id, page.offset + page.limit))
+  controls.append(previous, current, next)
+  return controls
 }
 
 function renderContent() {
@@ -415,7 +584,7 @@ function renderContent() {
     return
   }
   const service = state.data.services.find((candidate) => candidate.id === state.activeService)
-  if (!service) {
+  if (!service || (state.activeProvider !== "ALL" && service.provider !== state.activeProvider)) {
     state.activeService = "overview"
     renderOverview()
     return
@@ -426,8 +595,27 @@ function renderContent() {
 function selectService(id) {
   state.activeService = id
   renderNav()
-  renderContent()
+  if (id === "overview") {
+    state.page = { service: "", resources: [], total: 0, offset: 0, limit: 25, hasPrevious: false, hasNext: false, query: "" }
+    renderContent()
+  } else {
+    state.page = { service: id, resources: [], total: 0, offset: 0, limit: 25, hasPrevious: false, hasNext: false, query: state.query }
+    state.detailError = ""
+    state.detailLoading = true
+    renderContent()
+    loadServicePage(id, 0)
+  }
   if (window.innerWidth < 821) document.querySelector(".resource-panel")?.scrollIntoView({ behavior: "smooth", block: "start" })
+}
+
+function selectProvider(provider) {
+  if (!state.data || !["ALL", "AWS", "GCP"].includes(provider)) return
+  state.activeProvider = provider
+  const active = state.data.services.find((service) => service.id === state.activeService)
+  if (active && provider !== "ALL" && active.provider !== provider) state.activeService = "overview"
+  renderProviderFilter()
+  renderNav()
+  renderContent()
 }
 
 function renderServiceActions(service) {
@@ -442,7 +630,7 @@ function renderServiceActions(service) {
     create.addEventListener("click", () => openCreateDialog(service, create))
     elements.serviceActions.append(create)
   }
-  if (service.id === "fcm" && service.resources.length > 0) {
+  if (service.id === "fcm" && serviceResourceCount(service) > 0) {
     const action = createElement("button", "service-action", "캡처 비우기")
     action.type = "button"
     action.dataset.actionService = "fcm"
@@ -459,7 +647,7 @@ function renderServiceActions(service) {
     )
     elements.serviceActions.append(action)
   }
-  if (service.id === "vertex" && service.resources.length > 0) {
+  if (service.id === "vertex" && serviceResourceCount(service) > 0) {
     const action = createElement("button", "service-action", "호출 기록 비우기")
     action.type = "button"
     action.dataset.actionService = "vertex"
@@ -599,8 +787,7 @@ function renderCreateFields(service) {
     const renderExtra = () => {
       clear(extra)
       if (kind.value !== "subscription") return
-      const pubsub = state.data.services.find((candidate) => candidate.id === "pubsub")
-      const topics = (pubsub?.resources ?? []).filter((resource) => resource.kind === "Topic")
+      const topics = state.page.service === "pubsub" ? state.page.resources.filter((resource) => resource.kind === "Topic") : []
       const topic = selectControl(
         "topic",
         topics.length
@@ -753,6 +940,7 @@ async function executePendingAction() {
 function renderError(message) {
   clear(elements.content)
   clear(elements.serviceActions)
+  clear(elements.verification)
   elements.status.textContent = "FCP 상태를 불러오지 못했습니다."
   const wrapper = createElement("div", "error-state")
   const content = createElement("div")
@@ -765,32 +953,127 @@ function renderError(message) {
   elements.content.append(wrapper)
 }
 
-async function loadDashboard() {
-  if (state.loading) return
-  state.loading = true
-  elements.refresh.disabled = true
-  elements.refresh.classList.add("is-loading")
-  elements.status.textContent = "최신 상태를 불러오는 중입니다."
-  try {
-    const response = await fetch("/_fcp/dashboard", { cache: "no-store", headers: { Accept: "application/json" } })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    state.data = await response.json()
-    elements.project.textContent = state.data.project
-    elements.project.title = state.data.project
-    elements.updatedAt.textContent = `${formatDate(state.data.generatedAt)} 기준`
-    renderSummary()
-    renderNav()
+function updateConnectionState() {
+  const age = state.lastSuccessAt ? Date.now() - state.lastSuccessAt : Number.POSITIVE_INFINITY
+  let status = "connecting"
+  let label = "연결 중"
+  if (state.lastSuccessAt && age <= STALE_AFTER_MS) {
+    status = state.failures ? "reconnecting" : "connected"
+    label = state.failures ? "재연결 중" : "LOCAL"
+  } else if (state.lastSuccessAt) {
+    status = "stale"
+    label = "STALE"
+  } else if (state.failures) {
+    status = "offline"
+    label = "OFFLINE"
+  }
+  elements.connection.dataset.state = status
+  elements.connectionLabel.textContent = label
+  elements.connection.title = state.lastSuccessAt ? `마지막 성공: ${formatDate(new Date(state.lastSuccessAt).toISOString())}` : label
+}
+
+function markRequestSuccess(generatedAt) {
+  const generated = new Date(generatedAt).getTime()
+  state.lastSuccessAt = Number.isFinite(generated) ? generated : Date.now()
+  state.failures = 0
+  updateConnectionState()
+}
+
+function scheduleRefresh() {
+  if (state.refreshTimer) window.clearTimeout(state.refreshTimer)
+  state.refreshTimer = window.setTimeout(() => {
+    if (document.hidden || state.actioning || elements.dialog.open || elements.createDialog.open) {
+      scheduleRefresh()
+      return
+    }
+    loadDashboard({ silent: true })
+  }, AUTO_REFRESH_MS)
+}
+
+async function loadServicePage(serviceID, offset = 0, options = {}) {
+  if (!state.data || serviceID === "overview") return
+  const requestID = ++state.requestSerial
+  const silent = Boolean(options.silent)
+  if (!silent) {
+    state.detailLoading = true
+    state.detailError = ""
+    if (state.page.service !== serviceID) {
+      state.page = { service: serviceID, resources: [], total: 0, offset: 0, limit: 25, hasPrevious: false, hasNext: false, query: state.query }
+    }
     renderContent()
+  }
+  const parameters = new URLSearchParams({
+    view: "service",
+    service: serviceID,
+    limit: String(state.page.limit || 25),
+    offset: String(Math.max(0, offset)),
+  })
+  if (state.query.trim()) parameters.set("q", state.query.trim())
+  try {
+    const response = await fetch(`/_fcp/dashboard?${parameters}`, { cache: "no-store", headers: { Accept: "application/json" } })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const detail = await response.json()
+    if (requestID !== state.requestSerial || state.activeService !== serviceID) return
+    const service = detail.services.find((candidate) => candidate.id === serviceID)
+    const current = state.data.services.find((candidate) => candidate.id === serviceID)
+    if (!service || !current || !detail.page) throw new Error("페이지 응답 형식이 올바르지 않습니다.")
+    current.resourceCount = service.resourceCount
+    current.status = service.status
+    current.verification = service.verification
+    state.page = { ...detail.page, resources: service.resources ?? [] }
+    state.detailError = ""
+    markRequestSuccess(detail.generatedAt)
   } catch (error) {
-    renderError(error instanceof Error ? error.message : "알 수 없는 오류가 발생했습니다.")
+    if (requestID !== state.requestSerial || state.activeService !== serviceID) return
+    state.failures += 1
+    if (!silent) state.detailError = error instanceof Error ? error.message : "알 수 없는 오류가 발생했습니다."
+    updateConnectionState()
   } finally {
-    state.loading = false
-    elements.refresh.disabled = false
-    elements.refresh.classList.remove("is-loading")
+    if (requestID === state.requestSerial && state.activeService === serviceID) {
+      state.detailLoading = false
+      renderNav()
+      renderContent()
+    }
   }
 }
 
-elements.refresh.addEventListener("click", loadDashboard)
+async function loadDashboard(options = {}) {
+  if (state.loading) return
+  const silent = Boolean(options.silent)
+  state.loading = true
+  if (!silent) {
+    elements.refresh.disabled = true
+    elements.refresh.classList.add("is-loading")
+    elements.status.textContent = "최신 상태를 불러오는 중입니다."
+  }
+  try {
+    const response = await fetch("/_fcp/dashboard?view=summary", { cache: "no-store", headers: { Accept: "application/json" } })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    state.data = await response.json()
+    markRequestSuccess(state.data.generatedAt)
+    elements.project.textContent = state.data.project
+    elements.project.title = state.data.project
+    elements.updatedAt.textContent = `${formatDate(state.data.generatedAt)} 기준 · 3초 자동 갱신`
+    renderSummary()
+    renderProviderFilter()
+    renderNav()
+    renderContent()
+    if (state.activeService !== "overview") await loadServicePage(state.activeService, state.page.offset, { silent: true })
+  } catch (error) {
+    state.failures += 1
+    updateConnectionState()
+    if (!state.data) renderError(error instanceof Error ? error.message : "알 수 없는 오류가 발생했습니다.")
+  } finally {
+    state.loading = false
+    if (!silent) {
+      elements.refresh.disabled = false
+      elements.refresh.classList.remove("is-loading")
+    }
+    scheduleRefresh()
+  }
+}
+
+elements.refresh.addEventListener("click", () => loadDashboard())
 elements.resetWorkload.addEventListener("click", () =>
   openConfirmation(
     {
@@ -820,7 +1103,12 @@ elements.createDialog.addEventListener("close", () => {
 })
 elements.search.addEventListener("input", (event) => {
   state.query = event.target.value
-  renderContent()
+  if (state.searchTimer) window.clearTimeout(state.searchTimer)
+  if (state.activeService === "overview") {
+    renderContent()
+    return
+  }
+  state.searchTimer = window.setTimeout(() => loadServicePage(state.activeService, 0), 250)
 })
 document.addEventListener("keydown", (event) => {
   const target = event.target
@@ -833,8 +1121,19 @@ document.addEventListener("keydown", (event) => {
     elements.search.value = ""
     state.query = ""
     elements.search.blur()
-    renderContent()
+    if (state.activeService === "overview") renderContent()
+    else loadServicePage(state.activeService, 0)
   }
 })
 
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    if (state.refreshTimer) window.clearTimeout(state.refreshTimer)
+    return
+  }
+  loadDashboard({ silent: true })
+})
+
+window.setInterval(updateConnectionState, 1000)
+updateConnectionState()
 loadDashboard()

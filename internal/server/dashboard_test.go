@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -116,6 +117,25 @@ func TestDashboardListsResourcesWithoutSensitiveValues(t *testing.T) {
 	if dashboard.Project != "podo-local" || dashboard.Summary.ServiceCount != 13 {
 		t.Fatalf("unexpected dashboard summary: %+v", dashboard)
 	}
+	if dashboard.Summary.AWSServiceCount != 4 || dashboard.Summary.GCPServiceCount != 9 || dashboard.Summary.SDKVerifiedCount != 11 || dashboard.Summary.ContractVerifiedCount != 2 {
+		t.Fatalf("unexpected provider or verification summary: %+v", dashboard.Summary)
+	}
+	for _, service := range dashboard.Services {
+		if service.Provider != "AWS" && service.Provider != "GCP" {
+			t.Fatalf("service %s has unknown provider %q", service.ID, service.Provider)
+		}
+		if service.Verification.Level == "" || service.Verification.Label == "" || service.Verification.Evidence == "" || service.Verification.Source != "docs/compatibility.md" || len(service.Verification.Operations) == 0 {
+			t.Fatalf("service %s is missing verification evidence: %+v", service.ID, service.Verification)
+		}
+		for _, operation := range service.Verification.Operations {
+			if operation.Name == "" || operation.Scope == "" || (operation.Status != "FULL" && operation.Status != "PARTIAL") {
+				t.Fatalf("service %s has invalid operation verification: %+v", service.ID, operation)
+			}
+		}
+		if service.ResourceCount != len(service.Resources) {
+			t.Fatalf("service %s resource count=%d resources=%d", service.ID, service.ResourceCount, len(service.Resources))
+		}
+	}
 	secretService := findDashboardService(t, dashboard.Services, "secrets")
 	if len(secretService.Resources) == 0 {
 		t.Fatal("dashboard did not list Secret Manager resources")
@@ -127,6 +147,13 @@ func TestDashboardListsResourcesWithoutSensitiveValues(t *testing.T) {
 	vertexService := findDashboardService(t, dashboard.Services, "vertex")
 	if len(vertexService.Resources) != 1 || !hasDashboardAttribute(vertexService.Resources[0], "모델", "gemini-2.5-flash") || !hasDashboardAttribute(vertexService.Resources[0], "입력 문자", "24") {
 		t.Fatalf("unexpected Vertex AI dashboard data: %+v", vertexService)
+	}
+	if vertexService.Verification.Level != "SDK" || !strings.Contains(vertexService.Verification.Evidence, "Google Gen AI Java v1.58.0") {
+		t.Fatalf("Vertex AI verification evidence is incorrect: %+v", vertexService.Verification)
+	}
+	fcmVerification := fcmService.Verification
+	if fcmVerification.Level != "CONTRACT" || !strings.Contains(fcmVerification.Evidence, "PODO notification") {
+		t.Fatalf("FCM verification evidence is incorrect: %+v", fcmVerification)
 	}
 	s3Service := findDashboardService(t, dashboard.Services, "s3")
 	if len(s3Service.Resources) != 1 || !hasDashboardAttribute(s3Service.Resources[0], "진행 중 업로드", "1") {
@@ -152,6 +179,82 @@ func TestDashboardListsResourcesWithoutSensitiveValues(t *testing.T) {
 	}
 }
 
+func TestDashboardSummaryAndServicePagination(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 31; index++ {
+		if _, err := store.CreateGCSBucket("podo-local", fmt.Sprintf("dashboard-page-%02d", index), "ASIA", "STANDARD"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := httptest.NewServer(NewWithOptions(store, Options{ProjectID: "podo-local"}))
+	defer server.Close()
+
+	summary := getDashboard(t, server.URL+"/_fcp/dashboard?view=summary")
+	if summary.Page != nil {
+		t.Fatalf("summary unexpectedly contains page metadata: %+v", summary.Page)
+	}
+	gcsSummary := findDashboardService(t, summary.Services, "gcs")
+	if gcsSummary.ResourceCount != 31 || len(gcsSummary.Resources) != 0 {
+		t.Fatalf("summary should contain counts without resources: %+v", gcsSummary)
+	}
+	for _, service := range summary.Services {
+		if len(service.Resources) != 0 {
+			t.Fatalf("summary service %s unexpectedly contains resources", service.ID)
+		}
+		if len(service.Verification.Operations) != 0 || len(service.Verification.Limitations) != 0 {
+			t.Fatalf("summary service %s unexpectedly contains verification details", service.ID)
+		}
+	}
+
+	first := getDashboard(t, server.URL+"/_fcp/dashboard?view=service&service=gcs&limit=10")
+	firstGCS := findDashboardService(t, first.Services, "gcs")
+	if first.Page == nil || first.Page.Total != 31 || first.Page.Offset != 0 || first.Page.Limit != 10 || first.Page.HasPrevious || !first.Page.HasNext {
+		t.Fatalf("unexpected first page: %+v", first.Page)
+	}
+	if len(firstGCS.Resources) != 10 || firstGCS.ResourceCount != 31 || firstGCS.Resources[0].Name != "dashboard-page-00" {
+		t.Fatalf("unexpected first page resources: %+v", firstGCS)
+	}
+	if len(findDashboardService(t, first.Services, "s3").Resources) != 0 {
+		t.Fatal("service view should not include another service's resources")
+	}
+
+	last := getDashboard(t, server.URL+"/_fcp/dashboard?view=service&service=gcs&limit=10&offset=30&q=page-")
+	lastGCS := findDashboardService(t, last.Services, "gcs")
+	if last.Page == nil || last.Page.Total != 31 || last.Page.Offset != 30 || !last.Page.HasPrevious || last.Page.HasNext || len(lastGCS.Resources) != 1 {
+		t.Fatalf("unexpected last page: page=%+v resources=%+v", last.Page, lastGCS.Resources)
+	}
+
+	response, err := http.Get(server.URL + "/_fcp/dashboard?view=service&service=unknown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown service status=%d want=%d", response.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func getDashboard(t *testing.T, endpoint string) dashboardResponse {
+	t.Helper()
+	response, err := http.Get(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("dashboard status=%d body=%s", response.StatusCode, body)
+	}
+	var dashboard dashboardResponse
+	if err := json.NewDecoder(response.Body).Decode(&dashboard); err != nil {
+		t.Fatal(err)
+	}
+	return dashboard
+}
+
 func TestDashboardUIAssetsAreEmbedded(t *testing.T) {
 	server := newTestServer(t)
 	tests := []struct {
@@ -159,7 +262,7 @@ func TestDashboardUIAssetsAreEmbedded(t *testing.T) {
 		contentType string
 		contains    string
 	}{
-		{path: "/_fcp/ui", contentType: "text/html", contains: "FCP Control Deck"},
+		{path: "/_fcp/ui", contentType: "text/html", contains: "FCP Console"},
 		{path: "/_fcp/ui/styles.css", contentType: "text/css", contains: ".resource-panel"},
 		{path: "/_fcp/ui/app.js", contentType: "text/javascript", contains: "loadDashboard"},
 	}
@@ -189,7 +292,7 @@ func TestDashboardUIAssetsAreEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, accessibleName := range []string{`aria-label="새로고침"`, `aria-label="테스트 데이터 비우기"`, `aria-label="리소스 검색"`, `aria-labelledby="confirm-title"`, `aria-labelledby="create-title"`, `role="alert"`} {
+	for _, accessibleName := range []string{`aria-label="새로고침"`, `aria-label="테스트 데이터 비우기"`, `aria-label="리소스 검색"`, `aria-label="클라우드 제공자 필터"`, `id="verification-note"`, `aria-labelledby="confirm-title"`, `aria-labelledby="create-title"`, `role="alert"`} {
 		if !strings.Contains(string(index), accessibleName) {
 			t.Fatalf("dashboard is missing %s", accessibleName)
 		}

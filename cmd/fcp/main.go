@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/hjyoon/fcp/internal/cli"
 	"github.com/hjyoon/fcp/internal/profile"
 	"github.com/hjyoon/fcp/internal/server"
 	"github.com/hjyoon/fcp/internal/state"
@@ -17,6 +18,10 @@ import (
 var version = "dev"
 
 func main() {
+	if cli.IsCommand(os.Args[1:]) {
+		os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
+	}
+
 	listen := flag.String("listen", "127.0.0.1:4566", "HTTP listen address")
 	gcpListen := flag.String("gcp-listen", "127.0.0.1:8085", "GCP gRPC listen address")
 	legacyPubSubListen := flag.String("pubsub-listen", "", "deprecated alias for --gcp-listen")

@@ -1,17 +1,184 @@
+<div align="center">
+
 # FCP
 
-FCP(Fake Cloud Platform)는 로컬 개발과 CI 통합 테스트를 위한 경량 클라우드 에뮬레이터입니다. AWS S3/SQS/DynamoDB/STS와 PODO가 사용하는 GCP Storage, Pub/Sub, Firestore, Secret Manager, KMS, IAM Credentials, Compute Metadata 흐름을 공식 SDK·REST 프로토콜로 제공합니다. FCM은 외부 발송 대신 요청을 캡처하고 Vertex AI/Gemini 생성 API는 결정적인 로컬 응답을 반환합니다.
+### Fake Cloud Platform
+
+실제 AWS·Google Cloud SDK를 그대로 연결해 사용하는<br />
+**로컬 개발 및 통합 테스트용 경량 클라우드 에뮬레이터**
+
+[![CI](https://github.com/devy1540/fcp/actions/workflows/ci.yml/badge.svg)](https://github.com/devy1540/fcp/actions/workflows/ci.yml)
+![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)
+![AWS](https://img.shields.io/badge/AWS-4_services-232F3E?logo=amazonwebservices&logoColor=white)
+![Google Cloud](https://img.shields.io/badge/Google_Cloud-9_services-4285F4?logo=googlecloud&logoColor=white)
+![Local only](https://img.shields.io/badge/scope-local_%26_CI-475569)
+
+[빠른 시작](#빠른-시작) · [지원 서비스](#지원-서비스) · [CLI](#ai와-cli) · [신뢰도 기준](#신뢰도-기준) · [호환성 문서](docs/compatibility.md)
+
+</div>
+
+---
+
+애플리케이션 코드는 실제 SDK와 프로토콜을 사용하고, 연결 대상만 FCP로 바꿉니다. 외부 클라우드 없이도 객체 저장, 메시징, 데이터베이스, Secret, 서명, 알림, AI 호출 흐름을 빠르고 반복 가능하게 검증할 수 있습니다.
+
+| 실제 SDK 그대로 | 결정적인 로컬 상태 | 한눈에 보이는 검증 근거 |
+|---|---|---|
+| AWS·GCP 공식 클라이언트를 endpoint 설정만 바꿔 연결합니다. | 데이터는 `.fcp/`에 저장되고 재시작 후에도 유지됩니다. | 대시보드와 CLI에서 런타임 상태, SDK 검증, `FULL`·`PARTIAL` 범위를 구분합니다. |
 
 ## 빠른 시작
 
-```bash
-go run ./cmd/fcp
+### 1. FCP 실행
 
+```bash
+go run ./cmd/fcp \
+  --profile podo \
+  --project podo-local \
+  --credentials-out .fcp/podo-local-credentials.json
+```
+
+| endpoint | 용도 |
+|---|---|
+| `http://127.0.0.1:4566` | AWS API, GCP HTTP API, 관리 API |
+| `127.0.0.1:8085` | GCP gRPC API |
+| `http://127.0.0.1:4566/_fcp/ui` | 로컬 관리 대시보드 |
+
+### 2. 연결 상태 확인
+
+```bash
+go run ./cmd/fcp doctor --json
+go run ./cmd/fcp status --json
+```
+
+### 3. 애플리케이션 연결
+
+```bash
+# AWS
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
 export AWS_REGION=us-east-1
 export AWS_ENDPOINT_URL=http://127.0.0.1:4566
 
+# Google Cloud
+export STORAGE_EMULATOR_HOST=http://127.0.0.1:4566
+export PUBSUB_EMULATOR_HOST=127.0.0.1:8085
+export FIRESTORE_EMULATOR_HOST=127.0.0.1:8085
+export GOOGLE_CLOUD_PROJECT=podo-local
+```
+
+PODO 프로젝트별 환경 변수는 CLI로 바로 만들 수 있습니다.
+
+```bash
+go run ./cmd/fcp env podo-backend --format shell
+go run ./cmd/fcp env podo-notification --format shell
+go run ./cmd/fcp env podo-app --format shell
+```
+
+## 지원 서비스
+
+FCP는 전체 클라우드 복제가 아니라, PODO와 로컬 통합 테스트에서 실제로 사용하는 흐름을 우선 구현합니다.
+
+| Provider | 서비스 | 연결 방식 |
+|---|---|---|
+| **AWS** | S3, SQS, DynamoDB, STS | HTTP `:4566` |
+| **Google Cloud** | Cloud Storage, FCM, Vertex AI / Gemini, Compute Metadata | HTTP `:4566` |
+| **Google Cloud** | Pub/Sub, Firestore, Secret Manager, Cloud KMS, IAM Credentials | gRPC `:8085` |
+
+Secret Manager와 Cloud KMS는 PODO 서버가 직접 호출하는 HTTP/JSON 경로도 제공합니다. 서비스별 API, 검증 범위와 실제 클라우드와의 차이는 [호환성 문서](docs/compatibility.md)에 명시되어 있습니다.
+
+## 동작 구조
+
+```mermaid
+flowchart LR
+    APP[Application<br/>Official SDK] -->|AWS + GCP HTTP| HTTP[HTTP :4566]
+    APP -->|GCP gRPC| GRPC[gRPC :8085]
+    HTTP --> CORE[FCP state engine]
+    GRPC --> CORE
+    CORE --> DATA[(.fcp local data)]
+    CORE --> UI[Dashboard]
+    CLI[CLI / AI agent] --> HTTP
+```
+
+- 단일 Go 바이너리에 서버, 대시보드와 Codex Skill을 함께 포함합니다.
+- 메타데이터는 JSON snapshot으로, 객체 본문과 로컬 키는 데이터 디렉터리에 저장합니다.
+- 기본 바인딩은 loopback이며 외부 AWS·GCP 데이터를 가져오지 않습니다.
+
+## 로컬 대시보드
+
+`http://127.0.0.1:4566/_fcp/ui`에서 다음을 확인하고 관리할 수 있습니다.
+
+- AWS와 Google Cloud 서비스별 상태 및 리소스
+- 공식 SDK·HTTP 계약 검증 근거와 API별 `FULL`·`PARTIAL` 범위
+- SQS, Pub/Sub, FCM 메시지 상태와 Vertex AI 호출 메타데이터
+- 버킷, 큐, 테이블, Topic·Subscription 생성 및 안전한 삭제
+- 검색, 서버 페이지네이션, 3초 자동 갱신과 `STALE` 상태
+
+대시보드는 Secret payload, DynamoDB 아이템 값, KMS key material, IAM 개인키, 메시지 본문, AI 프롬프트와 생성 결과를 표시하지 않습니다.
+
+## AI와 CLI
+
+조회 명령은 AI 에이전트가 안정적으로 처리할 수 있도록 구조화된 JSON과 고정된 exit code를 제공합니다.
+
+| 명령 | 용도 |
+|---|---|
+| `fcp doctor --json` | HTTP, 대시보드, GCP gRPC 포트 진단 |
+| `fcp status --json` | 프로젝트와 서비스별 리소스 수 조회 |
+| `fcp env <profile> --format shell` | PODO 서비스별 로컬 환경 변수 생성 |
+| `fcp resources list --service <id> --json` | 비민감 리소스 메타데이터 검색 및 페이지 조회 |
+| `fcp verify --service <id> --json` | 런타임과 선언된 호환성 근거 확인 |
+| `fcp verify --strict --json` | 선택 범위에 `PARTIAL`이 있으면 실패 처리 |
+| `fcp skill install --json` | Codex용 `fcp-local-cloud` Skill 설치 |
+
+```bash
+# Pub/Sub 리소스 검색
+go run ./cmd/fcp resources list \
+  --provider GCP \
+  --service pubsub \
+  --query events \
+  --limit 25 \
+  --json
+
+# GCS 구현 범위 확인
+go run ./cmd/fcp verify --service gcs --json
+
+# Codex Skill 설치; 기존 Skill은 덮어쓰지 않음
+go run ./cmd/fcp skill install --json
+```
+
+Exit code는 성공 `0`, 런타임·검증 실패 `1`, 잘못된 사용법 `2`입니다. `verify`는 SDK 테스트를 새로 실행하거나 실제 클라우드 동등성을 증명하지 않습니다.
+
+## PODO 프로필
+
+`--profile podo`는 현재 PODO 로컬 개발에 필요한 리소스를 멱등하게 준비합니다.
+
+- `podo-notification` DynamoDB 테이블
+- `notification-local`, `reserved-local` SQS 큐
+- GCS 버킷과 V4 signed URL용 로컬 IAM 계정
+- Pub/Sub Topic, Subscription, DLQ
+- 빈 JSON Secret, 로컬 DB Secret, KMS 서명·암호화 키
+- FCM 요청 캡처와 결정적인 Vertex AI / Gemini 응답
+
+```bash
+go run ./cmd/fcp \
+  --profile podo \
+  --project podo-local \
+  --credentials-out .fcp/podo-local-credentials.json
+
+source examples/podo/env.sh
+```
+
+MySQL과 Redis도 함께 필요하다면 다음 구성을 사용합니다.
+
+```bash
+docker compose -f docker-compose.podo.yml up --build
+```
+
+Cloud SQL과 Memorystore 제어 API를 흉내 내는 대신, 애플리케이션이 실제 MySQL·Redis 프로토콜로 연결됩니다.
+
+## SDK 연결 예시
+
+### AWS CLI
+
+```bash
 aws s3api create-bucket --bucket uploads
 aws s3api put-object --bucket uploads --key hello.txt --body ./hello.txt
 
@@ -20,143 +187,86 @@ aws sqs send-message \
   --queue-url http://127.0.0.1:4566/000000000000/jobs \
   --message-body hello
 
-aws dynamodb create-table \
-  --table-name local-state \
-  --attribute-definitions AttributeName=pk,AttributeType=S \
-  --key-schema AttributeName=pk,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST
-
 aws sts get-caller-identity
 ```
 
-데이터는 기본적으로 `.fcp/`에 저장되며 프로세스를 재시작해도 유지됩니다.
+S3 SDK가 virtual-hosted style을 기본 사용한다면 `forcePathStyle` 옵션을 활성화하십시오.
 
-```bash
-go run ./cmd/fcp --listen 127.0.0.1:4566 --data-dir .fcp
-curl http://127.0.0.1:4566/_fcp/health
-
-# 객체·메시지·Firestore 문서·FCM/Vertex 호출 기록만 비우고 리소스 구조와 로컬 키는 유지
-curl -X POST http://127.0.0.1:4566/_fcp/actions \
-  -H 'Content-Type: application/json' \
-  --data '{"operation":"reset-workload"}'
-
-# 모든 리소스, Secret과 로컬 키까지 삭제하는 전체 초기화
-curl -X POST http://127.0.0.1:4566/_fcp/reset
-```
-
-브라우저에서 `http://127.0.0.1:4566/_fcp/ui`를 열면 서비스별 리소스와 메시지 상태, Vertex AI 생성 호출 메타데이터를 확인하고 S3 버킷, SQS Standard/FIFO 큐, DynamoDB 테이블, Cloud Storage 버킷, Pub/Sub Topic·Subscription을 만들거나 삭제할 수 있습니다. DynamoDB 테이블은 스키마를 유지한 채 아이템만 비울 수 있습니다. 삭제 전에는 확인 창을 표시하며 S3와 Cloud Storage 버킷은 비어 있을 때만 삭제합니다. SQS 큐, Pub/Sub 구독, FCM 캡처와 Vertex AI 호출 기록을 개별로 비우거나 전체 테스트 데이터만 안전하게 초기화할 수도 있습니다. 대시보드는 FCP 바이너리에 내장되며 Secret payload, DynamoDB 아이템, KMS key material, IAM 개인키, 업로드 파트, 메시지 본문, AI 프롬프트와 생성 결과는 표시하지 않습니다.
-
-같은 기능은 로컬 관리 API에서도 사용할 수 있습니다.
-
-```bash
-# S3 버킷 생성
-curl -X POST http://127.0.0.1:4566/_fcp/actions \
-  -H 'Content-Type: application/json' \
-  --data '{"operation":"create","service":"s3","kind":"bucket","resource":"local-assets"}'
-
-# 빈 S3 버킷 삭제
-curl -X POST http://127.0.0.1:4566/_fcp/actions \
-  -H 'Content-Type: application/json' \
-  --data '{"operation":"delete","service":"s3","kind":"bucket","resource":"local-assets"}'
-```
-
-SDK에서는 endpoint를 `http://127.0.0.1:4566`으로 지정합니다. S3 SDK가 virtual-hosted style을 기본 사용하면 `forcePathStyle` 옵션을 활성화하십시오.
-
-## GCP 연결
-
-Cloud Storage·FCM·Vertex·Compute Metadata와 Secret Manager/KMS REST API는 HTTP 포트, Pub/Sub·Firestore·Secret Manager·KMS·IAM Credentials SDK는 하나의 gRPC 포트를 사용합니다.
-
-```bash
-export STORAGE_EMULATOR_HOST=http://127.0.0.1:4566
-export PUBSUB_EMULATOR_HOST=127.0.0.1:8085
-export FIRESTORE_EMULATOR_HOST=127.0.0.1:8085
-export GOOGLE_CLOUD_PROJECT=test-project
-export GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:4566
-export GOOGLE_API_KEY=fcp-local
-```
-
-공식 GCP 클라이언트는 위 환경 변수를 감지해 인증 없이 FCP로 연결됩니다. Google Gen AI SDK는 `GOOGLE_GEMINI_BASE_URL`을 통해 모델 목록과 생성 요청을 FCP로 보냅니다.
+### Google Cloud Go SDK
 
 ```go
 storageClient, _ := storage.NewClient(ctx)
-_ = storageClient.Bucket("assets").Create(ctx, "test-project", nil)
+_ = storageClient.Bucket("assets").Create(ctx, "podo-local", nil)
 
-pubsubClient, _ := pubsub.NewClient(ctx, "test-project")
+pubsubClient, _ := pubsub.NewClient(ctx, "podo-local")
 _, _ = pubsubClient.TopicAdminClient.CreateTopic(ctx, &pubsubpb.Topic{
-	Name: "projects/test-project/topics/events",
+	Name: "projects/podo-local/topics/events",
 })
 ```
 
-Secret Manager, KMS와 IAM Credentials는 표준 emulator 환경 변수가 없으므로 SDK 설정에서 `127.0.0.1:8085`, plaintext 채널, no-credentials를 함께 지정해야 합니다. 언어별 실행 가능한 예제는 [공식 SDK 호환성 테스트](test-clients/README.md)에 있습니다.
+Secret Manager, KMS와 IAM Credentials는 표준 emulator 환경 변수가 없으므로 `127.0.0.1:8085`, plaintext 채널, no-credentials를 SDK에 함께 설정해야 합니다. 실행 가능한 Java·Kotlin·JavaScript 예제는 [공식 SDK 호환성 테스트](test-clients/README.md)에 있습니다.
 
-PODO의 Node 서버처럼 Metadata Server와 Secret Manager/KMS REST API를 직접 호출하는 애플리케이션은 HTTP 엔드포인트를 사용합니다.
+## 상태 초기화
 
-```bash
-export FCP_HTTP_ENDPOINT=http://127.0.0.1:4566
-export GCP_METADATA_BASE_URL=$FCP_HTTP_ENDPOINT/computeMetadata/v1
-export AUTH_SYSTEM_IDENTITY_JWK_SET_URI=$FCP_HTTP_ENDPOINT/oauth2/v3/certs
-```
-
-## PODO 프로필
+테스트 데이터만 비우면 리소스 구조, Secret, KMS와 IAM key material은 유지됩니다.
 
 ```bash
-go run ./cmd/fcp \
-  --profile podo \
-  --project podo-local \
-  --credentials-out .fcp/podo-local-credentials.json
-source examples/podo/env.sh
+curl -X POST http://127.0.0.1:4566/_fcp/actions \
+  -H 'Content-Type: application/json' \
+  --data '{"operation":"reset-workload"}'
 ```
 
-프로필은 PODO의 현재 local/dev 명칭에 맞춰 `podo-notification` DynamoDB 테이블, `notification-local`·`reserved-local` SQS 큐, GCS 버킷, Pub/Sub 토픽·구독·DLQ, 빈 JSON Secret과 로컬 DB Secret, KMS 서명/암호화 키, GCS 서명용 IAM 계정을 생성합니다. 큐 구현을 바꿔 확인하려면 `PODO_QUEUE_PROVIDER=sqs` 또는 `pubsub`을 지정한 뒤 `examples/podo/env.sh`를 적용합니다. `--credentials-out` 파일은 같은 로컬 IAM 키를 담기 때문에 Node Storage SDK의 V4 signed URL도 FCP가 실제 검증합니다. 파일 권한은 `0600`으로 기록됩니다. 재시작해도 Secret 버전이나 키가 중복 생성되지 않으며 운영 Secret이나 데이터를 가져오지 않습니다.
-
-MySQL과 Redis까지 함께 띄울 때는 다음 구성을 사용합니다. Cloud SQL과 Memorystore 제어 API를 흉내 내는 대신 애플리케이션이 실제 MySQL/Redis 프로토콜로 연결됩니다.
+모든 로컬 리소스와 키까지 삭제하는 전체 초기화는 별도 API입니다.
 
 ```bash
-docker compose -f docker-compose.podo.yml up --build
+curl -X POST http://127.0.0.1:4566/_fcp/reset
 ```
 
-FCM 발송 결과는 외부로 나가지 않고 조회할 수 있습니다. Vertex AI/Gemini 호출은 프롬프트와 결과 본문을 저장하지 않고 프로젝트·리전·모델·입력 문자 수·도구 수만 기록합니다.
+## 신뢰도 기준
+
+FCP는 “응답한다”와 “호환성이 검증됐다”를 구분합니다.
+
+| 표시 | 의미 |
+|---|---|
+| `READY` | 현재 로컬 프로세스가 요청을 받을 수 있음 |
+| `공식 SDK 검증` | 명시된 실제 클라이언트 버전으로 회귀 테스트가 존재함 |
+| `HTTP 계약 검증` | PODO가 직접 호출하는 요청·응답 경로를 계약 테스트로 검증함 |
+| `FULL` | 문서에 적힌 범위 안에서 요청·응답과 핵심 상태 전환을 검증함 |
+| `PARTIAL` | 핵심 경로는 지원하지만 명시된 제약이나 미지원 동작이 있음 |
+
+어떤 표시도 AWS·Google Cloud 전체와의 완전한 동등성을 의미하지 않습니다. CI는 Go 단위·통합·race 테스트와 실제 Java·Kotlin·JavaScript SDK 호환성 테스트를 실행합니다.
 
 ```bash
-curl http://127.0.0.1:4566/_fcp/fcm/messages?project=podo-local
-curl -X DELETE http://127.0.0.1:4566/_fcp/fcm/messages
-curl http://127.0.0.1:4566/_fcp/vertex/generations?project=podo-local
-curl -X DELETE http://127.0.0.1:4566/_fcp/vertex/generations
+go test -count=1 ./...
+go test -count=1 -race ./...
+go vet ./...
+node --check internal/server/dashboard/app.js
 ```
-
-## S3 이벤트를 SQS로 전달하기
-
-AWS의 `put-bucket-notification-configuration` API를 그대로 사용합니다.
-
-```bash
-QUEUE_URL=$(aws sqs get-queue-url --queue-name jobs --query QueueUrl --output text)
-QUEUE_ARN=$(aws sqs get-queue-attributes \
-  --queue-url "$QUEUE_URL" \
-  --attribute-names QueueArn \
-  --query Attributes.QueueArn \
-  --output text)
-
-aws s3api put-bucket-notification-configuration \
-  --bucket uploads \
-  --notification-configuration "{\"QueueConfigurations\":[{\"Id\":\"new-objects\",\"QueueArn\":\"$QUEUE_ARN\",\"Events\":[\"s3:ObjectCreated:*\"]}]}"
-```
-
-AWS/GCP 지원 범위와 실제 서비스와의 차이는 [호환성 문서](docs/compatibility.md)에 명시합니다.
 
 ## Docker
 
 ```bash
 docker build -t fcp .
-docker run --rm -p 4566:4566 -p 8085:8085 -v fcp-data:/data fcp
+docker run --rm \
+  -p 4566:4566 \
+  -p 8085:8085 \
+  -v fcp-data:/data \
+  fcp
 ```
 
-## 검증
+## 보안과 제한
 
-```bash
-go test ./...
-go vet ./...
-```
+> [!WARNING]
+> FCP는 로컬 개발 및 CI 전용입니다. AWS 자격 증명과 SigV4 서명을 검증하지 않으므로 신뢰할 수 없는 네트워크나 프로덕션 환경에 노출하지 마십시오.
 
-테스트는 상태 영속성, SQS visibility timeout과 message-attribute MD5, S3 이벤트 필터링, DynamoDB 단건·batch 상태 전환과 GCP 핵심 상태 전환을 검증합니다. 공식 Go SDK 외에 PODO가 사용하는 Java, Kotlin, JavaScript와 AWS SDK 버전도 실제 FCP 프로세스에 연결하는 호환성 테스트를 제공합니다.
+- 계정 ID는 `000000000000`, 기본 리전은 `us-east-1`로 고정됩니다.
+- 다중 노드, 리전 장애, 실제 클라우드의 성능·일관성·quota는 재현하지 않습니다.
+- FCM은 외부로 발송하지 않고 요청을 로컬에 캡처합니다.
+- Vertex AI / Gemini는 테스트가 반복 가능하도록 결정적인 로컬 응답을 반환합니다.
+- 전체 미지원 범위는 [호환성 문서](docs/compatibility.md)를 기준으로 판단합니다.
 
-> FCP는 요청의 AWS 자격 증명이나 SigV4 서명을 검증하지 않습니다. 기본 바인딩은 loopback이며 신뢰할 수 없는 네트워크에 노출하면 안 됩니다.
+---
+
+<div align="center">
+  <sub>Built for fast, inspectable and repeatable local cloud testing.</sub>
+</div>

@@ -1,0 +1,4 @@
+interface:
+  display_name: "FCP Local Cloud"
+  short_description: "Inspect and verify local AWS and GCP emulation"
+  default_prompt: "Use $fcp-local-cloud to diagnose and verify the local FCP environment."
