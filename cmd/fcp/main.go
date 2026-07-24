@@ -26,8 +26,8 @@ func main() {
 	gcpListen := flag.String("gcp-listen", "127.0.0.1:8085", "GCP gRPC listen address")
 	legacyPubSubListen := flag.String("pubsub-listen", "", "deprecated alias for --gcp-listen")
 	dataDir := flag.String("data-dir", ".fcp", "persistent data directory")
-	profileName := flag.String("profile", "", "optional seed profile (supported: podo)")
-	projectID := flag.String("project", "podo-local", "project ID used by the seed profile")
+	profileName := flag.String("profile", "", "optional seed profile (supported: demo)")
+	projectID := flag.String("project", "fcp-local", "project ID used by the seed profile")
 	metadataServiceAccount := flag.String("metadata-service-account", "", "service account email returned by the fake GCP metadata server")
 	credentialsOut := flag.String("credentials-out", "", "write local profile service-account credentials to this path")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -44,18 +44,18 @@ func main() {
 	}
 	if *profileName != "" {
 		switch *profileName {
-		case "podo":
-			summary, err := profile.SeedPodo(store, *projectID)
+		case "demo":
+			summary, err := profile.SeedDemo(store, *projectID)
 			if err != nil {
-				log.Fatalf("seed podo profile: %v", err)
+				log.Fatalf("seed demo profile: %v", err)
 			}
 			if *credentialsOut != "" {
-				if err := profile.WritePodoCredentials(store, *projectID, *credentialsOut); err != nil {
-					log.Fatalf("write PODO credentials: %v", err)
+				if err := profile.WriteDemoCredentials(store, *projectID, *credentialsOut); err != nil {
+					log.Fatalf("write FCP credentials: %v", err)
 				}
-				log.Printf("wrote local PODO credentials to %s", *credentialsOut)
+				log.Printf("wrote local FCP credentials to %s", *credentialsOut)
 			}
-			log.Printf("seeded PODO profile project=%s dynamo_tables=%d queues=%d buckets=%d topics=%d subscriptions=%d secrets=%d kms_keys=%d iam_accounts=%d", summary.Project, summary.DynamoTables, summary.Queues, summary.Buckets, summary.Topics, summary.Subscriptions, summary.Secrets, summary.KMSKeys, summary.IAMAccounts)
+			log.Printf("seeded demo profile project=%s dynamo_tables=%d queues=%d buckets=%d topics=%d subscriptions=%d secrets=%d kms_keys=%d iam_accounts=%d", summary.Project, summary.DynamoTables, summary.Queues, summary.Buckets, summary.Topics, summary.Subscriptions, summary.Secrets, summary.KMSKeys, summary.IAMAccounts)
 		default:
 			log.Fatalf("unknown profile %q", *profileName)
 		}

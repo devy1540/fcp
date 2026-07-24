@@ -15,7 +15,7 @@ import (
 	"github.com/hjyoon/fcp/internal/state"
 )
 
-type PodoSummary struct {
+type DemoSummary struct {
 	Project       string
 	Queues        int
 	Buckets       int
@@ -27,15 +27,15 @@ type PodoSummary struct {
 	DynamoTables  int
 }
 
-// SeedPodo creates only local-safe fixtures. It is idempotent and never copies
-// values from a deployed PODO environment.
-func SeedPodo(store *state.Store, project string) (PodoSummary, error) {
+// SeedDemo creates only local-safe fixtures. It is idempotent and never copies
+// values from an external environment.
+func SeedDemo(store *state.Store, project string) (DemoSummary, error) {
 	if project == "" {
-		project = "podo-local"
+		project = "fcp-local"
 	}
-	summary := PodoSummary{Project: project}
-	if _, err := store.DynamoTable("podo-notification"); errors.Is(err, state.ErrDynamoTableNotFound) {
-		if _, err := store.CreateDynamoTable("podo-notification",
+	summary := DemoSummary{Project: project}
+	if _, err := store.DynamoTable("notifications"); errors.Is(err, state.ErrDynamoTableNotFound) {
+		if _, err := store.CreateDynamoTable("notifications",
 			[]state.DynamoKeySchemaElement{{AttributeName: "pk", KeyType: "HASH"}, {AttributeName: "sk", KeyType: "RANGE"}},
 			[]state.DynamoAttributeDefinition{{AttributeName: "pk", AttributeType: "S"}, {AttributeName: "sk", AttributeType: "S"}},
 			"PAY_PER_REQUEST"); err != nil {
@@ -45,13 +45,13 @@ func SeedPodo(store *state.Store, project string) (PodoSummary, error) {
 		return summary, err
 	}
 	summary.DynamoTables = 1
-	for _, queue := range []string{"notification-local", "reserved-local"} {
+	for _, queue := range []string{"notifications", "scheduled-jobs"} {
 		if _, err := store.CreateQueue(queue, nil); err != nil {
 			return summary, err
 		}
 		summary.Queues++
 	}
-	for _, bucket := range []string{"podo-assets", "podo-assets-private", "podo-pdf-report", "podo-tutor-profile"} {
+	for _, bucket := range []string{"assets", "private-assets", "reports", "profiles"} {
 		if _, err := store.CreateGCSBucket(project, bucket, "asia-northeast3", "STANDARD"); err != nil {
 			return summary, err
 		}
@@ -59,12 +59,12 @@ func SeedPodo(store *state.Store, project string) (PodoSummary, error) {
 	}
 
 	topicIDs := []string{
-		"leveltest-dev", "cs-ticket-ai-dev", "diagnosis-pipeline-dev",
-		"podo-slack-dev", "alims-dev", "coupon-dev",
-		"podo-slack-dlq", "notification-dlq", "coupon-dlq", "leveltest-dlq", "cs-ticket-ai-dlq",
+		"events", "ai-jobs", "data-pipeline",
+		"alerts", "notifications", "jobs",
+		"alerts-dlq", "notifications-dlq", "jobs-dlq", "events-dlq", "ai-jobs-dlq",
 	}
 	for _, id := range topicIDs {
-		if _, err := store.CreatePubSubTopic(pubSubTopic(project, id), map[string]string{"fcp-profile": "podo"}); err != nil {
+		if _, err := store.CreatePubSubTopic(pubSubTopic(project, id), map[string]string{"fcp-profile": "demo"}); err != nil {
 			return summary, err
 		}
 		summary.Topics++
@@ -74,21 +74,21 @@ func SeedPodo(store *state.Store, project string) (PodoSummary, error) {
 		name, topic, dlq string
 	}
 	subscriptions := []subscriptionSeed{
-		{"diagnosis-pipeline-dev-sub", "diagnosis-pipeline-dev", ""},
-		{"podo-slack-dev-sub", "podo-slack-dev", "podo-slack-dlq"},
-		{"alims-dev-sub", "alims-dev", "notification-dlq"},
-		{"coupon-dev-sub", "coupon-dev", "coupon-dlq"},
-		{"leveltest-dev-sub", "leveltest-dev", "leveltest-dlq"},
-		{"cs-ticket-ai-dev-sub", "cs-ticket-ai-dev", "cs-ticket-ai-dlq"},
-		{"podo-slack-dlq-sub", "podo-slack-dlq", ""},
-		{"notification-dlq-sub", "notification-dlq", ""},
-		{"coupon-dlq-sub", "coupon-dlq", ""},
-		{"leveltest-dlq-sub", "leveltest-dlq", ""},
-		{"cs-ticket-ai-dlq-sub", "cs-ticket-ai-dlq", ""},
+		{"data-pipeline-worker", "data-pipeline", ""},
+		{"alerts-worker", "alerts", "alerts-dlq"},
+		{"notifications-worker", "notifications", "notifications-dlq"},
+		{"jobs-worker", "jobs", "jobs-dlq"},
+		{"events-worker", "events", "events-dlq"},
+		{"ai-jobs-worker", "ai-jobs", "ai-jobs-dlq"},
+		{"alerts-dlq-reader", "alerts-dlq", ""},
+		{"notifications-dlq-reader", "notifications-dlq", ""},
+		{"jobs-dlq-reader", "jobs-dlq", ""},
+		{"events-dlq-reader", "events-dlq", ""},
+		{"ai-jobs-dlq-reader", "ai-jobs-dlq", ""},
 	}
 	for _, seed := range subscriptions {
 		name := pubSubSubscription(project, seed.name)
-		if _, err := store.CreatePubSubSubscription(name, pubSubTopic(project, seed.topic), 10, map[string]string{"fcp-profile": "podo"}, false); err != nil {
+		if _, err := store.CreatePubSubSubscription(name, pubSubTopic(project, seed.topic), 10, map[string]string{"fcp-profile": "demo"}, false); err != nil {
 			return summary, err
 		}
 		if seed.dlq != "" {
@@ -100,17 +100,17 @@ func SeedPodo(store *state.Store, project string) (PodoSummary, error) {
 	}
 
 	secrets := map[string]string{
-		"podo-backend-common-database":          `{}`,
-		"podo-backend-common-jwt":               `{}`,
-		"podo-backend-common-ai-keys":           `{}`,
-		"podo-backend-common-external-services": `{}`,
-		"podo-backend-local-env-specific":       `{}`,
-		"podo-common":                           `{"PODO_NOTIFICATOR_SLACK_TOKEN":""}`,
-		"cloudsql-proxy-local":                  `{"host":"127.0.0.1","port":"3306","database":"podo","username":"podo","password":"podo"}`,
+		"app-database":     `{}`,
+		"app-jwt":          `{}`,
+		"app-ai":           `{}`,
+		"app-integrations": `{}`,
+		"app-local":        `{}`,
+		"notifications":    `{}`,
+		"mysql-local":      `{"host":"127.0.0.1","port":"3306","database":"app","username":"app","password":"app"}`,
 	}
 	for id, payload := range secrets {
 		name := fmt.Sprintf("projects/%s/secrets/%s", project, id)
-		created, err := store.CreateSecret(name, map[string]string{"fcp-profile": "podo"})
+		created, err := store.CreateSecret(name, map[string]string{"fcp-profile": "demo"})
 		if err != nil {
 			return summary, err
 		}
@@ -122,7 +122,7 @@ func SeedPodo(store *state.Store, project string) (PodoSummary, error) {
 		summary.Secrets++
 	}
 
-	keyRing := fmt.Sprintf("projects/%s/locations/asia-northeast3/keyRings/podo-local", project)
+	keyRing := fmt.Sprintf("projects/%s/locations/asia-northeast3/keyRings/fcp-local", project)
 	if _, err := store.CreateKMSKeyRing(keyRing); err != nil {
 		return summary, err
 	}
@@ -144,7 +144,7 @@ func SeedPodo(store *state.Store, project string) (PodoSummary, error) {
 			return summary, err
 		}
 	}
-	symmetricName := keyRing + "/cryptoKeys/pii-kek-nonprod"
+	symmetricName := keyRing + "/cryptoKeys/data-encryption"
 	if _, err := store.KMSCryptoKey(symmetricName); err == state.ErrKMSCryptoKeyNotFound {
 		material := make([]byte, 32)
 		if _, err := rand.Read(material); err != nil {
@@ -159,20 +159,20 @@ func SeedPodo(store *state.Store, project string) (PodoSummary, error) {
 		}
 	}
 	summary.KMSKeys = 2
-	if _, err := podoStorageSigner(store, project); err != nil {
+	if _, err := demoStorageSigner(store, project); err != nil {
 		return summary, err
 	}
 	summary.IAMAccounts = 1
 	return summary, nil
 }
 
-// WritePodoCredentials exports a local-only service-account key backed by the
+// WriteDemoCredentials exports a local-only service-account key backed by the
 // same persistent IAM signing key FCP uses to verify GCS signed requests.
-func WritePodoCredentials(store *state.Store, project, path string) error {
+func WriteDemoCredentials(store *state.Store, project, path string) error {
 	if project == "" {
-		project = "podo-local"
+		project = "fcp-local"
 	}
-	account, err := podoStorageSigner(store, project)
+	account, err := demoStorageSigner(store, project)
 	if err != nil {
 		return err
 	}
@@ -191,7 +191,7 @@ func WritePodoCredentials(store *state.Store, project, path string) error {
 			Type:  "PRIVATE KEY",
 			Bytes: account.PrivateKey,
 		})),
-		ClientEmail: podoStorageSignerEmail(project),
+		ClientEmail: demoStorageSignerEmail(project),
 		TokenURI:    "https://oauth2.googleapis.com/token",
 	}
 	payload, err := json.MarshalIndent(credentials, "", "  ")
@@ -217,8 +217,8 @@ func WritePodoCredentials(store *state.Store, project, path string) error {
 	return file.Close()
 }
 
-func podoStorageSigner(store *state.Store, project string) (state.IAMServiceAccount, error) {
-	name := "projects/-/serviceAccounts/" + podoStorageSignerEmail(project)
+func demoStorageSigner(store *state.Store, project string) (state.IAMServiceAccount, error) {
+	name := "projects/-/serviceAccounts/" + demoStorageSignerEmail(project)
 	return store.IAMServiceAccount(name, func() ([]byte, error) {
 		privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 		if err != nil {
@@ -228,8 +228,8 @@ func podoStorageSigner(store *state.Store, project string) (state.IAMServiceAcco
 	})
 }
 
-func podoStorageSignerEmail(project string) string {
-	return fmt.Sprintf("podo-storage-signer@%s.iam.gserviceaccount.com", project)
+func demoStorageSignerEmail(project string) string {
+	return fmt.Sprintf("fcp-storage-signer@%s.iam.gserviceaccount.com", project)
 }
 
 func pubSubTopic(project, id string) string {

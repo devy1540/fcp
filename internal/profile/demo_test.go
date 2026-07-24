@@ -9,13 +9,13 @@ import (
 	"github.com/hjyoon/fcp/internal/state"
 )
 
-func TestSeedPodoIsIdempotent(t *testing.T) {
+func TestSeedDemoIsIdempotent(t *testing.T) {
 	store, err := state.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		summary, err := SeedPodo(store, "podo-local")
+		summary, err := SeedDemo(store, "fcp-local")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -23,32 +23,32 @@ func TestSeedPodoIsIdempotent(t *testing.T) {
 			t.Fatalf("unexpected summary: %+v", summary)
 		}
 	}
-	for _, queueName := range []string{"notification-local", "reserved-local"} {
+	for _, queueName := range []string{"notifications", "scheduled-jobs"} {
 		queue, err := store.Queue(queueName)
 		if err != nil || queue.Name != queueName {
-			t.Fatalf("unexpected PODO SQS queue %q: queue=%+v err=%v", queueName, queue, err)
+			t.Fatalf("unexpected demo SQS queue %q: queue=%+v err=%v", queueName, queue, err)
 		}
 	}
-	dynamoTable, err := store.DynamoTable("podo-notification")
+	dynamoTable, err := store.DynamoTable("notifications")
 	if err != nil || len(dynamoTable.KeySchema) != 2 || dynamoTable.BillingMode != "PAY_PER_REQUEST" {
-		t.Fatalf("unexpected PODO DynamoDB table: table=%+v err=%v", dynamoTable, err)
+		t.Fatalf("unexpected demo DynamoDB table: table=%+v err=%v", dynamoTable, err)
 	}
-	secret, err := store.Secret("projects/podo-local/secrets/podo-common")
+	secret, err := store.Secret("projects/fcp-local/secrets/notifications")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(secret.Versions) != 1 {
 		t.Fatalf("profile restart must not add secret versions: %+v", secret.Versions)
 	}
-	subscription, err := store.PubSubSubscription("projects/podo-local/subscriptions/podo-slack-dev-sub")
+	subscription, err := store.PubSubSubscription("projects/fcp-local/subscriptions/alerts-worker")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if subscription.DeadLetterTopic != "projects/podo-local/topics/podo-slack-dlq" || subscription.MaxDeliveryAttempts != 5 {
-		t.Fatalf("unexpected PODO DLQ policy: %+v", subscription)
+	if subscription.DeadLetterTopic != "projects/fcp-local/topics/alerts-dlq" || subscription.MaxDeliveryAttempts != 5 {
+		t.Fatalf("unexpected demo DLQ policy: %+v", subscription)
 	}
 	credentialsPath := filepath.Join(t.TempDir(), "credentials.json")
-	if err := WritePodoCredentials(store, "podo-local", credentialsPath); err != nil {
+	if err := WriteDemoCredentials(store, "fcp-local", credentialsPath); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(credentialsPath)
@@ -71,7 +71,7 @@ func TestSeedPodoIsIdempotent(t *testing.T) {
 	if err := json.Unmarshal(payload, &credentials); err != nil {
 		t.Fatal(err)
 	}
-	if credentials.ProjectID != "podo-local" || credentials.ClientEmail != "podo-storage-signer@podo-local.iam.gserviceaccount.com" || credentials.PrivateKeyID == "" || credentials.PrivateKey == "" {
+	if credentials.ProjectID != "fcp-local" || credentials.ClientEmail != "fcp-storage-signer@fcp-local.iam.gserviceaccount.com" || credentials.PrivateKeyID == "" || credentials.PrivateKey == "" {
 		t.Fatalf("unexpected local credentials: %+v", credentials)
 	}
 }

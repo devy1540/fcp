@@ -32,7 +32,7 @@ import { Upload } from '@aws-sdk/lib-storage'
 import { PubSub } from '@google-cloud/pubsub'
 import { Storage } from '@google-cloud/storage'
 
-const projectId = 'podo-local'
+const projectId = 'fcp-local'
 
 test('AWS SDK v3 S3 works with FCP including Range, CopyObject and presigned GET', async (t) => {
   const endpoint = process.env.AWS_ENDPOINT_URL
@@ -393,7 +393,7 @@ test('AWS SDK v3 SQS FIFO preserves group order and deduplicates sends', async (
   assert.equal(contentAttributes.Attributes.ApproximateNumberOfMessages, '3')
 })
 
-test('PODO JavaScript Storage and Pub/Sub SDK versions work with FCP', async (t) => {
+test('FCP JavaScript Storage and Pub/Sub SDK versions work with FCP', async (t) => {
   assert.ok(process.env.STORAGE_EMULATOR_HOST)
   assert.ok(process.env.PUBSUB_EMULATOR_HOST)
 
@@ -428,14 +428,14 @@ test('PODO JavaScript Storage and Pub/Sub SDK versions work with FCP', async (t)
       resolve(message)
     })
   })
-  const messageId = await topic.publishMessage({ data: Buffer.from('javascript sdk'), attributes: { source: 'podo-app' } })
+  const messageId = await topic.publishMessage({ data: Buffer.from('javascript sdk'), attributes: { source: 'javascript-client' } })
   const message = await received
   assert.equal(message.id, messageId)
   assert.equal(message.data.toString(), 'javascript sdk')
-  assert.equal(message.attributes.source, 'podo-app')
+  assert.equal(message.attributes.source, 'javascript-client')
 })
 
-test('PODO REST calls use FCP Metadata, Secret Manager and KMS', async () => {
+test('REST clients use Metadata, Secret Manager and KMS endpoints', async () => {
   const endpoint = process.env.FCP_HTTP_ENDPOINT
   assert.ok(endpoint)
 
@@ -448,14 +448,14 @@ test('PODO REST calls use FCP Metadata, Secret Manager and KMS', async () => {
   assert.equal(projectResponse.status, 200)
   assert.equal((await projectResponse.text()).trim(), projectId)
   assert.equal(emailResponse.status, 200)
-  assert.match((await emailResponse.text()).trim(), /@podo-local\.iam\.gserviceaccount\.com$/)
+  assert.match((await emailResponse.text()).trim(), /@fcp-local\.iam\.gserviceaccount\.com$/)
   const metadataToken = await tokenResponse.json()
   assert.equal(tokenResponse.status, 200)
   assert.equal(metadataToken.token_type, 'Bearer')
   assert.equal(metadataToken.access_token.split('.').length, 3)
 
   const identityResponse = await fetch(
-    `${endpoint}/computeMetadata/v1/instance/service-accounts/default/identity?audience=podo-backend-system-token&format=full`,
+    `${endpoint}/computeMetadata/v1/instance/service-accounts/default/identity?audience=fcp-test-audience&format=full`,
     { headers: metadataHeaders },
   )
   assert.equal(identityResponse.status, 200)
@@ -466,15 +466,15 @@ test('PODO REST calls use FCP Metadata, Secret Manager and KMS', async () => {
   const jwks = await jwksResponse.json()
   assert.equal(jwks.keys.length, 1)
 
-  const secretResponse = await fetch(`${endpoint}/v1/projects/${projectId}/secrets/podo-common/versions/latest:access`, {
+  const secretResponse = await fetch(`${endpoint}/v1/projects/${projectId}/secrets/notifications/versions/latest:access`, {
     headers: { Authorization: `Bearer ${metadataToken.access_token}` },
   })
   assert.equal(secretResponse.status, 200)
   const secret = await secretResponse.json()
-  assert.equal(Buffer.from(secret.payload.data, 'base64').toString(), '{"PODO_NOTIFICATOR_SLACK_TOKEN":""}')
+  assert.equal(Buffer.from(secret.payload.data, 'base64').toString(), '{}')
 
-  const key = `projects/${projectId}/locations/asia-northeast3/keyRings/podo-local/cryptoKeys/pii-kek-nonprod`
-  const plaintext = Buffer.from('podo pii rest')
+  const key = `projects/${projectId}/locations/asia-northeast3/keyRings/fcp-local/cryptoKeys/data-encryption`
+  const plaintext = Buffer.from('demo data')
   const encryptResponse = await fetch(`${endpoint}/v1/${key}:encrypt`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${metadataToken.access_token}`, 'Content-Type': 'application/json' },

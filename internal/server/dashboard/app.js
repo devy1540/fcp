@@ -179,7 +179,7 @@ function renderSummary() {
     summaryCard(1, "AWS 서비스", state.data.summary.awsServiceCount, `${awsResources}개 로컬 리소스`, "AWS"),
     summaryCard(2, "GCP 서비스", state.data.summary.gcpServiceCount, `${gcpResources}개 로컬 리소스`, "GCP"),
     summaryCard(3, "공식 SDK 검증", state.data.summary.sdkVerifiedCount, "실제 클라이언트 회귀 테스트", "SDK"),
-    summaryCard(4, "HTTP 계약 검증", state.data.summary.contractVerifiedCount, "PODO 직접 호출 경로 테스트", "CONTRACT"),
+    summaryCard(4, "HTTP 계약 검증", state.data.summary.contractVerifiedCount, "명시된 HTTP 경로 테스트", "CONTRACT"),
   )
 }
 
@@ -262,7 +262,7 @@ function renderVerification(service) {
     const summary = createElement("div", "verification-summary")
     summary.append(
       createElement("strong", "", "검증 기준"),
-      createElement("span", "", "READY는 실행 상태, 검증 배지는 실제 SDK 또는 PODO HTTP 계약 회귀 테스트를 뜻합니다."),
+      createElement("span", "", "READY는 실행 상태, 검증 배지는 실제 SDK 또는 HTTP 계약 회귀 테스트를 뜻합니다."),
     )
     elements.verification.append(summary)
     return
@@ -746,7 +746,7 @@ function renderCreateFields(service) {
     return
   }
   if (service.id === "gcs") {
-    const name = textControl("resource", "예: local-podo-assets", { minLength: 3, maxLength: 63 })
+    const name = textControl("resource", "예: local-assets", { minLength: 3, maxLength: 63 })
     const location = selectControl("location", [
       { value: "asia-northeast3", label: "asia-northeast3 (Seoul)" },
       { value: "ASIA", label: "ASIA" },
@@ -767,7 +767,7 @@ function renderCreateFields(service) {
     return
   }
   if (service.id === "dynamodb") {
-    const name = textControl("resource", "예: podo-notification", { minLength: 3, maxLength: 255 })
+    const name = textControl("resource", "예: notifications", { minLength: 3, maxLength: 255 })
     const partitionKey = textControl("partitionKey", "pk", { maxLength: 255, value: "pk" })
     const sortKey = textControl("sortKey", "선택 사항 (예: sk)", { maxLength: 255, required: false })
     elements.createFields.append(

@@ -20,10 +20,10 @@ func TestDoctorStatusResourcesAndVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := profile.SeedPodo(store, "podo-local"); err != nil {
+	if _, err := profile.SeedDemo(store, "fcp-local"); err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(server.NewWithOptions(store, server.Options{ProjectID: "podo-local"}))
+	httpServer := httptest.NewServer(server.NewWithOptions(store, server.Options{ProjectID: "fcp-local"}))
 	defer httpServer.Close()
 	gcpListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -65,14 +65,14 @@ func TestDoctorReportsOfflineWithoutPanicking(t *testing.T) {
 }
 
 func TestEnvJSONAndShell(t *testing.T) {
-	jsonResult := runCLI(t, "env", "podo-backend", "--format", "json", "--endpoint", "http://127.0.0.1:9999")
+	jsonResult := runCLI(t, "env", "gcp", "--format", "json", "--endpoint", "http://127.0.0.1:9999")
 	if jsonResult.exitCode != 0 || !jsonResult.output.OK || !strings.Contains(jsonResult.stdout, `"GOOGLE_GEMINI_BASE_URL": "http://127.0.0.1:9999"`) || strings.Contains(jsonResult.stdout, "AWS_SECRET_ACCESS_KEY") {
-		t.Fatalf("backend env exit=%d stdout=%s stderr=%s", jsonResult.exitCode, jsonResult.stdout, jsonResult.stderr)
+		t.Fatalf("gcp env exit=%d stdout=%s stderr=%s", jsonResult.exitCode, jsonResult.stdout, jsonResult.stderr)
 	}
 
-	shellResult := runCLI(t, "env", "podo-notification", "--format", "shell")
-	if shellResult.exitCode != 0 || !strings.Contains(shellResult.stdout, "export AWS_ENDPOINT_URL='http://127.0.0.1:4566'") || !strings.Contains(shellResult.stdout, "export PODO_QUEUE_PROVIDER='pubsub'") {
-		t.Fatalf("notification env exit=%d stdout=%s stderr=%s", shellResult.exitCode, shellResult.stdout, shellResult.stderr)
+	shellResult := runCLI(t, "env", "aws", "--format", "shell")
+	if shellResult.exitCode != 0 || !strings.Contains(shellResult.stdout, "export AWS_ENDPOINT_URL='http://127.0.0.1:4566'") || strings.Contains(shellResult.stdout, "GOOGLE_CLOUD_PROJECT") {
+		t.Fatalf("aws env exit=%d stdout=%s stderr=%s", shellResult.exitCode, shellResult.stdout, shellResult.stderr)
 	}
 }
 
@@ -104,7 +104,7 @@ func TestUsageErrorsUseJSONAndExitTwo(t *testing.T) {
 }
 
 func TestUnknownCommandIsDetectedBeforeServerStartup(t *testing.T) {
-	if !IsCommand([]string{"unknown"}) || IsCommand([]string{"--profile", "podo"}) || IsCommand(nil) {
+	if !IsCommand([]string{"unknown"}) || IsCommand([]string{"--profile", "demo"}) || IsCommand(nil) {
 		t.Fatal("command detection does not preserve server flags")
 	}
 	result := runCLI(t, "unknown")

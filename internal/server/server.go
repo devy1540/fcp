@@ -32,7 +32,7 @@ func New(store *state.Store) http.Handler {
 func NewWithOptions(store *state.Store, options Options) http.Handler {
 	projectID := strings.TrimSpace(options.ProjectID)
 	if projectID == "" {
-		projectID = "podo-local"
+		projectID = "fcp-local"
 	}
 	serviceAccountEmail := strings.TrimSpace(options.ServiceAccountEmail)
 	if serviceAccountEmail == "" {

@@ -12,33 +12,33 @@ import org.junit.jupiter.api.Test;
 class FcmCompatibilityTest {
 
     @Test
-    void podoNotificationFcpPushPathCapturesMessage() throws Exception {
+    void demoNotificationFcpPushPathCapturesMessage() throws Exception {
         String endpoint = required("FCP_HTTP_ENDPOINT");
-        String token = "podo-notification-jvm-" + System.nanoTime();
+        String token = "notifications-jvm-" + System.nanoTime();
         String payload = """
-                {"message":{"token":"%s","data":{"source":"podo-notification"}}}
+                {"message":{"token":"%s","data":{"source":"notifications"}}}
                 """.formatted(token);
 
         var client = HttpClient.newHttpClient();
         var request = HttpRequest.newBuilder()
-                .uri(URI.create(endpoint + "/v1/projects/podo-local/messages:send"))
+                .uri(URI.create(endpoint + "/v1/projects/fcp-local/messages:send"))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(payload))
                 .build();
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
         assertEquals(200, response.statusCode());
-        assertTrue(response.body().contains("projects/podo-local/messages/"));
+        assertTrue(response.body().contains("projects/fcp-local/messages/"));
 
         var captured = client.send(
                 HttpRequest.newBuilder()
-                        .uri(URI.create(endpoint + "/_fcp/fcm/messages?project=podo-local"))
+                        .uri(URI.create(endpoint + "/_fcp/fcm/messages?project=fcp-local"))
                         .GET()
                         .build(),
                 HttpResponse.BodyHandlers.ofString());
         assertEquals(200, captured.statusCode());
         assertTrue(captured.body().contains(token));
-        assertTrue(captured.body().contains("podo-notification"));
+        assertTrue(captured.body().contains("notifications"));
     }
 
     private static String required(String name) {

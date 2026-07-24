@@ -18,25 +18,25 @@ import (
 	"github.com/hjyoon/fcp/internal/state"
 )
 
-func newPodoRESTTestServer(t *testing.T) *httptest.Server {
+func newDemoRESTTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	store, err := state.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := profile.SeedPodo(store, "podo-local"); err != nil {
+	if _, err := profile.SeedDemo(store, "fcp-local"); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(NewWithOptions(store, Options{
-		ProjectID:           "podo-local",
-		ServiceAccountEmail: "tutor-web@podo-local.iam.gserviceaccount.com",
+		ProjectID:           "fcp-local",
+		ServiceAccountEmail: "app@fcp-local.iam.gserviceaccount.com",
 	}))
 	t.Cleanup(server.Close)
 	return server
 }
 
 func TestMetadataServerTokenIdentityAndJWKS(t *testing.T) {
-	server := newPodoRESTTestServer(t)
+	server := newDemoRESTTestServer(t)
 
 	missingHeader, err := http.Get(server.URL + metadataPrefix + "/project/project-id")
 	if err != nil {
@@ -48,11 +48,11 @@ func TestMetadataServerTokenIdentityAndJWKS(t *testing.T) {
 	}
 
 	projectID := metadataGet(t, server.URL+metadataPrefix+"/project/project-id", false)
-	if projectID != "podo-local" {
+	if projectID != "fcp-local" {
 		t.Fatalf("metadata project ID = %q", projectID)
 	}
 	email := metadataGet(t, server.URL+metadataPrefix+"/instance/service-accounts/default/email", false)
-	if email != "tutor-web@podo-local.iam.gserviceaccount.com" {
+	if email != "app@fcp-local.iam.gserviceaccount.com" {
 		t.Fatalf("metadata service account = %q", email)
 	}
 
@@ -66,7 +66,7 @@ func TestMetadataServerTokenIdentityAndJWKS(t *testing.T) {
 		t.Fatalf("unexpected metadata access token response: %+v", accessToken)
 	}
 
-	identity := metadataGet(t, server.URL+metadataPrefix+"/instance/service-accounts/default/identity?audience=podo-backend-system-token&format=full", false)
+	identity := metadataGet(t, server.URL+metadataPrefix+"/instance/service-accounts/default/identity?audience=fcp-test-audience&format=full", false)
 	parts := strings.Split(identity, ".")
 	if len(parts) != 3 {
 		t.Fatalf("identity token has %d parts", len(parts))
@@ -75,7 +75,7 @@ func TestMetadataServerTokenIdentityAndJWKS(t *testing.T) {
 	var claims map[string]any
 	decodeJWTPart(t, parts[0], &header)
 	decodeJWTPart(t, parts[1], &claims)
-	if claims["iss"] != "https://accounts.google.com" || claims["aud"] != "podo-backend-system-token" || claims["email"] != email || claims["email_verified"] != true {
+	if claims["iss"] != "https://accounts.google.com" || claims["aud"] != "fcp-test-audience" || claims["email"] != email || claims["email_verified"] != true {
 		t.Fatalf("unexpected identity claims: %+v", claims)
 	}
 
@@ -107,8 +107,8 @@ func TestMetadataServerTokenIdentityAndJWKS(t *testing.T) {
 }
 
 func TestSecretManagerRESTAccess(t *testing.T) {
-	server := newPodoRESTTestServer(t)
-	response, err := http.Get(server.URL + "/v1/projects/podo-local/secrets/podo-common/versions/latest:access")
+	server := newDemoRESTTestServer(t)
+	response, err := http.Get(server.URL + "/v1/projects/fcp-local/secrets/notifications/versions/latest:access")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,15 +130,15 @@ func TestSecretManagerRESTAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Name != "projects/podo-local/secrets/podo-common/versions/1" || string(decoded) != `{"PODO_NOTIFICATOR_SLACK_TOKEN":""}` {
+	if result.Name != "projects/fcp-local/secrets/notifications/versions/1" || string(decoded) != `{}` {
 		t.Fatalf("unexpected secret REST response: name=%q payload=%q", result.Name, decoded)
 	}
 }
 
 func TestKMSRESTEncryptAndDecrypt(t *testing.T) {
-	server := newPodoRESTTestServer(t)
-	key := "projects/podo-local/locations/asia-northeast3/keyRings/podo-local/cryptoKeys/pii-kek-nonprod"
-	plaintext := []byte("podo pii rest")
+	server := newDemoRESTTestServer(t)
+	key := "projects/fcp-local/locations/asia-northeast3/keyRings/fcp-local/cryptoKeys/data-encryption"
+	plaintext := []byte("demo data")
 	encryptBody, _ := json.Marshal(map[string]string{"plaintext": base64.StdEncoding.EncodeToString(plaintext)})
 	encryptResponse := postJSON(t, server.URL+"/v1/"+key+":encrypt", encryptBody)
 	var encrypted struct {

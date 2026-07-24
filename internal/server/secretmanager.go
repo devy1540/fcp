@@ -69,7 +69,7 @@ func (s *secretManagerServer) ListSecrets(_ context.Context, request *secretmana
 }
 
 func (s *secretManagerServer) UpdateSecret(_ context.Context, request *secretmanagerpb.UpdateSecretRequest) (*secretmanagerpb.Secret, error) {
-	// PODO only reads secrets. Returning the current metadata for an empty update
+	// FCP only reads secrets. Returning the current metadata for an empty update
 	// mask keeps official SDK setup code compatible without pretending to support
 	// rotation or replication updates.
 	if request.GetUpdateMask() != nil && len(request.GetUpdateMask().GetPaths()) > 0 {

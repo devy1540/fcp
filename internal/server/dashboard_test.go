@@ -21,32 +21,32 @@ func TestDashboardListsResourcesWithoutSensitiveValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := profile.SeedPodo(store, "podo-local"); err != nil {
+	if _, err := profile.SeedDemo(store, "fcp-local"); err != nil {
 		t.Fatal(err)
 	}
-	secret, err := store.CreateSecret("projects/podo-local/secrets/dashboard-private", nil)
+	secret, err := store.CreateSecret("projects/fcp-local/secrets/dashboard-private", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AddSecretVersion(secret.Name, []byte("do-not-expose-secret-payload")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.IAMServiceAccount("projects/-/serviceAccounts/dashboard@podo-local.iam.gserviceaccount.com", func() ([]byte, error) {
+	if _, err := store.IAMServiceAccount("projects/-/serviceAccounts/dashboard@fcp-local.iam.gserviceaccount.com", func() ([]byte, error) {
 		return []byte("do-not-expose-private-key"), nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.CreateKMSCryptoKey(state.KMSCryptoKey{
-		Name:    "projects/podo-local/locations/asia-northeast3/keyRings/podo-local/cryptoKeys/dashboard-key",
+		Name:    "projects/fcp-local/locations/asia-northeast3/keyRings/fcp-local/cryptoKeys/dashboard-key",
 		Purpose: "ENCRYPT_DECRYPT", Algorithm: "GOOGLE_SYMMETRIC_ENCRYPTION", PrimaryVersion: 1, CreateTime: time.Now().UTC(),
 		Versions: []state.KMSKeyVersion{{Number: 1, Algorithm: "GOOGLE_SYMMETRIC_ENCRYPTION", State: "ENABLED", KeyMaterial: []byte("do-not-expose-key-material"), CreateTime: time.Now().UTC()}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.RecordFCMMessage("podo-local", json.RawMessage(`{"token":"do-not-expose-device-token","notification":{"title":"private"}}`), false); err != nil {
+	if _, err := store.RecordFCMMessage("fcp-local", json.RawMessage(`{"token":"do-not-expose-device-token","notification":{"title":"private"}}`), false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.RecordVertexGeneration("podo-local", "global", "gemini-2.5-flash", "generateContent", 24, 2); err != nil {
+	if _, err := store.RecordVertexGeneration("fcp-local", "global", "gemini-2.5-flash", "generateContent", 24, 2); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CreateBucket("dashboard-s3"); err != nil {
@@ -83,7 +83,7 @@ func TestDashboardListsResourcesWithoutSensitiveValues(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(NewWithOptions(store, Options{ProjectID: "podo-local"}))
+	server := httptest.NewServer(NewWithOptions(store, Options{ProjectID: "fcp-local"}))
 	defer server.Close()
 	response, err := http.Get(server.URL + "/_fcp/dashboard")
 	if err != nil {
@@ -114,7 +114,7 @@ func TestDashboardListsResourcesWithoutSensitiveValues(t *testing.T) {
 	if err := json.Unmarshal(body, &dashboard); err != nil {
 		t.Fatal(err)
 	}
-	if dashboard.Project != "podo-local" || dashboard.Summary.ServiceCount != 13 {
+	if dashboard.Project != "fcp-local" || dashboard.Summary.ServiceCount != 13 {
 		t.Fatalf("unexpected dashboard summary: %+v", dashboard)
 	}
 	if dashboard.Summary.AWSServiceCount != 4 || dashboard.Summary.GCPServiceCount != 9 || dashboard.Summary.SDKVerifiedCount != 11 || dashboard.Summary.ContractVerifiedCount != 2 {
@@ -152,7 +152,7 @@ func TestDashboardListsResourcesWithoutSensitiveValues(t *testing.T) {
 		t.Fatalf("Vertex AI verification evidence is incorrect: %+v", vertexService.Verification)
 	}
 	fcmVerification := fcmService.Verification
-	if fcmVerification.Level != "CONTRACT" || !strings.Contains(fcmVerification.Evidence, "PODO notification") {
+	if fcmVerification.Level != "CONTRACT" || !strings.Contains(fcmVerification.Evidence, "FCM HTTP v1") {
 		t.Fatalf("FCM verification evidence is incorrect: %+v", fcmVerification)
 	}
 	s3Service := findDashboardService(t, dashboard.Services, "s3")
@@ -185,11 +185,11 @@ func TestDashboardSummaryAndServicePagination(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index := 0; index < 31; index++ {
-		if _, err := store.CreateGCSBucket("podo-local", fmt.Sprintf("dashboard-page-%02d", index), "ASIA", "STANDARD"); err != nil {
+		if _, err := store.CreateGCSBucket("fcp-local", fmt.Sprintf("dashboard-page-%02d", index), "ASIA", "STANDARD"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	server := httptest.NewServer(NewWithOptions(store, Options{ProjectID: "podo-local"}))
+	server := httptest.NewServer(NewWithOptions(store, Options{ProjectID: "fcp-local"}))
 	defer server.Close()
 
 	summary := getDashboard(t, server.URL+"/_fcp/dashboard?view=summary")
@@ -316,8 +316,8 @@ func TestDashboardActionsPurgeMessagesAndResetWorkload(t *testing.T) {
 	if _, err := store.SendMessage("jobs", "job", nil, 0); err != nil {
 		t.Fatal(err)
 	}
-	topic := "projects/podo-local/topics/events"
-	subscription := "projects/podo-local/subscriptions/worker"
+	topic := "projects/fcp-local/topics/events"
+	subscription := "projects/fcp-local/subscriptions/worker"
 	if _, err := store.CreatePubSubTopic(topic, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -327,10 +327,10 @@ func TestDashboardActionsPurgeMessagesAndResetWorkload(t *testing.T) {
 	if _, err := store.PublishPubSub(topic, []state.PubSubMessage{{Data: []byte("event")}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.RecordFCMMessage("podo-local", json.RawMessage(`{"token":"local"}`), false); err != nil {
+	if _, err := store.RecordFCMMessage("fcp-local", json.RawMessage(`{"token":"local"}`), false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.RecordVertexGeneration("podo-local", "global", "gemini-2.5-flash", "generateContent", 5, 0); err != nil {
+	if _, err := store.RecordVertexGeneration("fcp-local", "global", "gemini-2.5-flash", "generateContent", 5, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.CreateDynamoTable("local-state",
@@ -342,7 +342,7 @@ func TestDashboardActionsPurgeMessagesAndResetWorkload(t *testing.T) {
 	if _, _, err := store.DynamoPutItem("local-state", state.DynamoItem{"pk": {S: &localKey}}, nil); err != nil {
 		t.Fatal(err)
 	}
-	secretName := "projects/podo-local/secrets/config"
+	secretName := "projects/fcp-local/secrets/config"
 	if _, err := store.CreateSecret(secretName, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +350,7 @@ func TestDashboardActionsPurgeMessagesAndResetWorkload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(NewWithOptions(store, Options{ProjectID: "podo-local"}))
+	server := httptest.NewServer(NewWithOptions(store, Options{ProjectID: "fcp-local"}))
 	defer server.Close()
 	dashboardAction(t, server.URL, dashboardActionRequest{Operation: "purge", Service: "sqs", Resource: "jobs"})
 	queue, err := store.Queue("jobs")
@@ -391,7 +391,7 @@ func TestDashboardActionsCreateAndDeleteResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(NewWithOptions(store, Options{ProjectID: "podo-local"}))
+	server := httptest.NewServer(NewWithOptions(store, Options{ProjectID: "fcp-local"}))
 	defer server.Close()
 
 	dashboardAction(t, server.URL, dashboardActionRequest{Operation: "create", Service: "s3", Kind: "bucket", Resource: "dashboard-assets"})
@@ -427,12 +427,12 @@ func TestDashboardActionsCreateAndDeleteResources(t *testing.T) {
 		Parameters: map[string]string{"location": "asia-northeast3", "storageClass": "NEARLINE"},
 	})
 	gcsBucket, err := store.GCSBucket("dashboard-gcs")
-	if err != nil || gcsBucket.Project != "podo-local" || gcsBucket.Location != "ASIA-NORTHEAST3" || gcsBucket.StorageClass != "NEARLINE" {
+	if err != nil || gcsBucket.Project != "fcp-local" || gcsBucket.Location != "ASIA-NORTHEAST3" || gcsBucket.StorageClass != "NEARLINE" {
 		t.Fatalf("dashboard did not create GCS bucket: bucket=%+v err=%v", gcsBucket, err)
 	}
 
 	dashboardAction(t, server.URL, dashboardActionRequest{Operation: "create", Service: "pubsub", Kind: "topic", Resource: "dashboard-events"})
-	topic := "projects/podo-local/topics/dashboard-events"
+	topic := "projects/fcp-local/topics/dashboard-events"
 	if _, err := store.PubSubTopic(topic); err != nil {
 		t.Fatalf("dashboard did not create Pub/Sub topic: %v", err)
 	}
@@ -440,7 +440,7 @@ func TestDashboardActionsCreateAndDeleteResources(t *testing.T) {
 		Operation: "create", Service: "pubsub", Kind: "subscription", Resource: "dashboard-worker",
 		Parameters: map[string]string{"topic": topic, "ackDeadlineSeconds": "30", "enableOrdering": "true"},
 	})
-	subscription := "projects/podo-local/subscriptions/dashboard-worker"
+	subscription := "projects/fcp-local/subscriptions/dashboard-worker"
 	storedSubscription, err := store.PubSubSubscription(subscription)
 	if err != nil || storedSubscription.Topic != topic || storedSubscription.AckDeadlineSeconds != 30 || !storedSubscription.EnableOrdering {
 		t.Fatalf("dashboard did not create Pub/Sub subscription: subscription=%+v err=%v", storedSubscription, err)

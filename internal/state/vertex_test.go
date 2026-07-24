@@ -8,14 +8,14 @@ func TestVertexGenerationPersistsAndWorkloadResetClearsMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.RecordVertexGeneration("podo-local", "global", "gemini-2.5-flash", "generateContent", 42, 1); err != nil {
+	if _, err := store.RecordVertexGeneration("fcp-local", "global", "gemini-2.5-flash", "generateContent", 42, 1); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	generations := reopened.ListVertexGenerations("podo-local")
+	generations := reopened.ListVertexGenerations("fcp-local")
 	if len(generations) != 1 || generations[0].InputCharacters != 42 || generations[0].ToolCount != 1 {
 		t.Fatalf("unexpected persisted generation metadata: %+v", generations)
 	}

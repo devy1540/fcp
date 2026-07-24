@@ -1,6 +1,6 @@
 ---
 name: fcp-local-cloud
-description: Diagnose, configure, inspect, and verify the FCP lightweight AWS/GCP emulator through its machine-readable CLI. Use when an agent needs to start local PODO cloud dependencies, generate emulator environment variables, check FCP health, inspect local resources without exposing payloads, interpret FULL/PARTIAL compatibility, or decide when real AWS/GCP verification is still required.
+description: Diagnose, configure, inspect, and verify the FCP lightweight AWS/GCP emulator through its machine-readable CLI. Use when an agent needs to start local cloud dependencies, generate emulator environment variables, check FCP health, inspect local resources without exposing payloads, interpret FULL/PARTIAL compatibility, or decide when real AWS/GCP verification is still required.
 ---
 
 # FCP Local Cloud
@@ -24,14 +24,14 @@ Treat a nonzero exit code or `"ok": false` as a failed check. Do not infer servi
 
 Use `--endpoint` and `--gcp-endpoint` when FCP is not on the default loopback ports. Never expose FCP to an untrusted network; it does not validate AWS credentials or SigV4.
 
-## Configure PODO services
+## Configure applications
 
 Generate environment variables instead of reconstructing them:
 
 ```bash
-fcp env podo-backend --format shell
-fcp env podo-notification --format json
-fcp env podo-app --format shell
+fcp env aws --format shell
+fcp env gcp --format json
+fcp env all --format shell
 ```
 
 Inspect shell output before sourcing it. Keep generated credentials local and never print their contents.
@@ -59,9 +59,9 @@ fcp verify --strict --json
 Interpret results precisely:
 
 - `FULL` means the documented scope is regression-tested, not complete cloud parity.
-- `PARTIAL` means the result may be sufficient for the PODO path but has named exclusions.
+- `PARTIAL` means the result may be sufficient for a documented integration path but has named exclusions.
 - `SDK` evidence names a client version with a compatibility test.
-- `CONTRACT` evidence covers PODO's direct HTTP request/response path.
+- `CONTRACT` evidence covers a directly tested HTTP request/response path.
 - Runtime verification only proves the local process exposes the declared contract. Run repository SDK tests when changing protocols or client versions.
 
 Use real AWS/GCP for IAM and signature enforcement, quotas, performance, multi-region behavior, distributed consistency, vendor-specific delivery, and final release confidence.
