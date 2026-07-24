@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/hjyoon/fcp/internal/state"
+	"github.com/devy1540/fcp/internal/state"
 )
 
 const dynamoTargetPrefix = "DynamoDB_20120810."

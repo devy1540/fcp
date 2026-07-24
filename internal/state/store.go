@@ -169,14 +169,8 @@ func Open(dir string) (*Store, error) {
 	s := &Store{
 		dir:     dir,
 		objects: filepath.Join(dir, "objects"),
-		data: snapshot{
-			Buckets: map[string]*Bucket{}, MultipartUploads: map[string]*MultipartUpload{}, Queues: map[string]*Queue{}, DynamoTables: map[string]*DynamoTable{}, GCSBuckets: map[string]*GCSBucket{},
-			PubSubTopics: map[string]*PubSubTopic{}, PubSubSubscriptions: map[string]*PubSubSubscription{},
-			FirestoreDocuments: map[string]*FirestoreDocument{}, Secrets: map[string]*Secret{},
-			KMSKeyRings: map[string]*KMSKeyRing{}, KMSCryptoKeys: map[string]*KMSCryptoKey{},
-			IAMServiceAccounts: map[string]*IAMServiceAccount{}, VertexGenerations: []VertexGeneration{},
-		},
-		now: time.Now,
+		data:    emptySnapshot(),
+		now:     time.Now,
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -188,24 +182,39 @@ func Open(dir string) (*Store, error) {
 	if err := json.Unmarshal(raw, &s.data); err != nil {
 		return nil, fmt.Errorf("decode state: %w", err)
 	}
-	if s.data.Buckets == nil {
-		s.data.Buckets = map[string]*Bucket{}
+	normalizeSnapshot(&s.data)
+	return s, nil
+}
+
+func emptySnapshot() snapshot {
+	return snapshot{
+		Buckets: map[string]*Bucket{}, MultipartUploads: map[string]*MultipartUpload{}, Queues: map[string]*Queue{}, DynamoTables: map[string]*DynamoTable{}, GCSBuckets: map[string]*GCSBucket{},
+		PubSubTopics: map[string]*PubSubTopic{}, PubSubSubscriptions: map[string]*PubSubSubscription{},
+		FirestoreDocuments: map[string]*FirestoreDocument{}, Secrets: map[string]*Secret{},
+		KMSKeyRings: map[string]*KMSKeyRing{}, KMSCryptoKeys: map[string]*KMSCryptoKey{},
+		IAMServiceAccounts: map[string]*IAMServiceAccount{}, FCMMessages: []FCMMessage{}, VertexGenerations: []VertexGeneration{},
 	}
-	if s.data.MultipartUploads == nil {
-		s.data.MultipartUploads = map[string]*MultipartUpload{}
+}
+
+func normalizeSnapshot(data *snapshot) {
+	if data.Buckets == nil {
+		data.Buckets = map[string]*Bucket{}
 	}
-	if s.data.Queues == nil {
-		s.data.Queues = map[string]*Queue{}
+	if data.MultipartUploads == nil {
+		data.MultipartUploads = map[string]*MultipartUpload{}
 	}
-	if s.data.DynamoTables == nil {
-		s.data.DynamoTables = map[string]*DynamoTable{}
+	if data.Queues == nil {
+		data.Queues = map[string]*Queue{}
 	}
-	for _, table := range s.data.DynamoTables {
+	if data.DynamoTables == nil {
+		data.DynamoTables = map[string]*DynamoTable{}
+	}
+	for _, table := range data.DynamoTables {
 		if table.Items == nil {
 			table.Items = map[string]DynamoItem{}
 		}
 	}
-	for _, queue := range s.data.Queues {
+	for _, queue := range data.Queues {
 		if queue.Attributes == nil {
 			queue.Attributes = map[string]string{}
 		}
@@ -213,37 +222,36 @@ func Open(dir string) (*Store, error) {
 			queue.Deduplication = map[string]DeduplicationRecord{}
 		}
 	}
-	if s.data.GCSBuckets == nil {
-		s.data.GCSBuckets = map[string]*GCSBucket{}
+	if data.GCSBuckets == nil {
+		data.GCSBuckets = map[string]*GCSBucket{}
 	}
-	if s.data.PubSubTopics == nil {
-		s.data.PubSubTopics = map[string]*PubSubTopic{}
+	if data.PubSubTopics == nil {
+		data.PubSubTopics = map[string]*PubSubTopic{}
 	}
-	if s.data.PubSubSubscriptions == nil {
-		s.data.PubSubSubscriptions = map[string]*PubSubSubscription{}
+	if data.PubSubSubscriptions == nil {
+		data.PubSubSubscriptions = map[string]*PubSubSubscription{}
 	}
-	if s.data.FirestoreDocuments == nil {
-		s.data.FirestoreDocuments = map[string]*FirestoreDocument{}
+	if data.FirestoreDocuments == nil {
+		data.FirestoreDocuments = map[string]*FirestoreDocument{}
 	}
-	if s.data.Secrets == nil {
-		s.data.Secrets = map[string]*Secret{}
+	if data.Secrets == nil {
+		data.Secrets = map[string]*Secret{}
 	}
-	if s.data.KMSKeyRings == nil {
-		s.data.KMSKeyRings = map[string]*KMSKeyRing{}
+	if data.KMSKeyRings == nil {
+		data.KMSKeyRings = map[string]*KMSKeyRing{}
 	}
-	if s.data.KMSCryptoKeys == nil {
-		s.data.KMSCryptoKeys = map[string]*KMSCryptoKey{}
+	if data.KMSCryptoKeys == nil {
+		data.KMSCryptoKeys = map[string]*KMSCryptoKey{}
 	}
-	if s.data.IAMServiceAccounts == nil {
-		s.data.IAMServiceAccounts = map[string]*IAMServiceAccount{}
+	if data.IAMServiceAccounts == nil {
+		data.IAMServiceAccounts = map[string]*IAMServiceAccount{}
 	}
-	if s.data.FCMMessages == nil {
-		s.data.FCMMessages = []FCMMessage{}
+	if data.FCMMessages == nil {
+		data.FCMMessages = []FCMMessage{}
 	}
-	if s.data.VertexGenerations == nil {
-		s.data.VertexGenerations = []VertexGeneration{}
+	if data.VertexGenerations == nil {
+		data.VertexGenerations = []VertexGeneration{}
 	}
-	return s, nil
 }
 
 func (s *Store) saveLocked() error {
@@ -278,14 +286,7 @@ func (s *Store) saveLocked() error {
 func (s *Store) Reset() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data = snapshot{
-		Buckets: map[string]*Bucket{}, MultipartUploads: map[string]*MultipartUpload{}, Queues: map[string]*Queue{}, DynamoTables: map[string]*DynamoTable{}, GCSBuckets: map[string]*GCSBucket{},
-		PubSubTopics: map[string]*PubSubTopic{}, PubSubSubscriptions: map[string]*PubSubSubscription{},
-		FirestoreDocuments: map[string]*FirestoreDocument{}, Secrets: map[string]*Secret{},
-		KMSKeyRings: map[string]*KMSKeyRing{}, KMSCryptoKeys: map[string]*KMSCryptoKey{},
-		IAMServiceAccounts: map[string]*IAMServiceAccount{},
-		FCMMessages:        []FCMMessage{}, VertexGenerations: []VertexGeneration{},
-	}
+	s.data = emptySnapshot()
 	entries, err := os.ReadDir(s.objects)
 	if err != nil {
 		return err

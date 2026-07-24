@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hjyoon/fcp/internal/profile"
-	"github.com/hjyoon/fcp/internal/state"
+	"github.com/devy1540/fcp/internal/profile"
+	"github.com/devy1540/fcp/internal/state"
 )
 
 func TestDashboardListsResourcesWithoutSensitiveValues(t *testing.T) {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -39,6 +40,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runVerify(args[1:], stdout, stderr)
 	case "skill":
 		return runSkill(args[1:], stdout, stderr)
+	case "snapshot":
+		return runSnapshot(args[1:], stdout, stderr)
+	case "exec":
+		return runExec(args[1:], stdout, stderr)
 	case "help":
 		writeUsage(stdout)
 		return 0
@@ -55,6 +60,8 @@ func writeUsage(output io.Writer) {
   fcp env [aws|gcp|all] [--format json|shell]
   fcp resources list --service ID [--provider AWS|GCP] [--query TEXT] --json
   fcp verify [--service ID] [--strict] --json
+  fcp snapshot list|save NAME|load NAME|delete NAME [--endpoint URL] --json
+  fcp exec [--snapshot NAME] [--data-dir DIRECTORY] [--profile demo] -- COMMAND [ARGS...]
   fcp skill install [--target DIRECTORY]
 
 Run fcp without a subcommand to start the local emulator.`)
@@ -130,6 +137,40 @@ func (c *apiClient) getJSON(path string, target any) error {
 		_ = json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&body)
 		message := firstNonEmpty(body.Message, body.Error, response.Status)
 		return fmt.Errorf("GET %s: %s", path, message)
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 8<<20)).Decode(target); err != nil {
+		return fmt.Errorf("decode %s: %w", path, err)
+	}
+	return nil
+}
+
+func (c *apiClient) postJSON(path string, body, target any) error {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequest(http.MethodPost, c.endpoint+path, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.http.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		var responseBody struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		_ = json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&responseBody)
+		message := firstNonEmpty(responseBody.Message, responseBody.Error, response.Status)
+		return fmt.Errorf("POST %s: %s", path, message)
+	}
+	if target == nil || response.StatusCode == http.StatusNoContent {
+		return nil
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 8<<20)).Decode(target); err != nil {
 		return fmt.Errorf("decode %s: %w", path, err)

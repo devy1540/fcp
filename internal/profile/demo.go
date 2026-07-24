@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/hjyoon/fcp/internal/state"
+	"github.com/devy1540/fcp/internal/state"
 )
 
 type DemoSummary struct {

@@ -1,18 +1,17 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
-	"net"
-	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/hjyoon/fcp/internal/cli"
-	"github.com/hjyoon/fcp/internal/profile"
-	"github.com/hjyoon/fcp/internal/server"
-	"github.com/hjyoon/fcp/internal/state"
+	"github.com/devy1540/fcp/internal/cli"
+	fcpruntime "github.com/devy1540/fcp/internal/runtime"
 )
 
 var version = "dev"
@@ -38,57 +37,40 @@ func main() {
 		return
 	}
 
-	store, err := state.Open(*dataDir)
-	if err != nil {
-		log.Fatalf("open state: %v", err)
-	}
-	if *profileName != "" {
-		switch *profileName {
-		case "demo":
-			summary, err := profile.SeedDemo(store, *projectID)
-			if err != nil {
-				log.Fatalf("seed demo profile: %v", err)
-			}
-			if *credentialsOut != "" {
-				if err := profile.WriteDemoCredentials(store, *projectID, *credentialsOut); err != nil {
-					log.Fatalf("write FCP credentials: %v", err)
-				}
-				log.Printf("wrote local FCP credentials to %s", *credentialsOut)
-			}
-			log.Printf("seeded demo profile project=%s dynamo_tables=%d queues=%d buckets=%d topics=%d subscriptions=%d secrets=%d kms_keys=%d iam_accounts=%d", summary.Project, summary.DynamoTables, summary.Queues, summary.Buckets, summary.Topics, summary.Subscriptions, summary.Secrets, summary.KMSKeys, summary.IAMAccounts)
-		default:
-			log.Fatalf("unknown profile %q", *profileName)
-		}
-	}
-
-	handler := server.NewWithOptions(store, server.Options{
-		ProjectID:           *projectID,
-		ServiceAccountEmail: *metadataServiceAccount,
-	})
 	if *legacyPubSubListen != "" {
 		*gcpListen = *legacyPubSubListen
 	}
-	gcpListener, err := net.Listen("tcp", *gcpListen)
+	fcpRuntime, err := fcpruntime.Start(fcpruntime.Config{
+		Listen:                 *listen,
+		GCPListen:              *gcpListen,
+		DataDir:                *dataDir,
+		Profile:                *profileName,
+		ProjectID:              *projectID,
+		MetadataServiceAccount: *metadataServiceAccount,
+		CredentialsOut:         *credentialsOut,
+		Version:                version,
+		Logger:                 log.Default(),
+	})
 	if err != nil {
-		log.Fatalf("listen for GCP APIs: %v", err)
-	}
-	gcpServer := server.NewGCPGRPCServer(store)
-	go func() {
-		log.Printf("FCP GCP gRPC APIs listening on %s", *gcpListen)
-		if err := gcpServer.Serve(gcpListener); err != nil {
-			log.Printf("GCP gRPC server stopped: %v", err)
-		}
-	}()
-	httpServer := &http.Server{
-		Addr:              *listen,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		log.Fatal(err)
 	}
 
-	log.Printf("FCP %s listening on http://%s (data: %s)", version, *listen, *dataDir)
-	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Printf("server stopped: %v", err)
-		os.Exit(1)
+	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	exitCode := 0
+	select {
+	case <-signalContext.Done():
+	case runtimeErr := <-fcpRuntime.Errors():
+		log.Printf("server stopped: %v", runtimeErr)
+		exitCode = 1
+	}
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := fcpRuntime.Close(shutdownContext); err != nil {
+		log.Printf("shutdown FCP: %v", err)
+		exitCode = 1
+	}
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 }

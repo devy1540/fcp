@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hjyoon/fcp/internal/state"
+	"github.com/devy1540/fcp/internal/state"
 )
 
 const gcsV4Algorithm = "GOOG4-RSA-SHA256"

@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hjyoon/fcp/internal/profile"
-	"github.com/hjyoon/fcp/internal/state"
+	"github.com/devy1540/fcp/internal/profile"
+	"github.com/devy1540/fcp/internal/state"
 )
 
 func newDemoRESTTestServer(t *testing.T) *httptest.Server {

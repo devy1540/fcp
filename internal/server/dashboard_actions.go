@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hjyoon/fcp/internal/state"
+	"github.com/devy1540/fcp/internal/state"
 )
 
 type dashboardActionRequest struct {

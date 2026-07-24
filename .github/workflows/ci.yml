@@ -28,6 +28,8 @@ jobs:
       - run: go vet ./...
       - run: node --check internal/server/dashboard/app.js
       - run: docker compose config -q
+      - run: docker build --build-arg VERSION=ci -t fcp:ci .
+      - run: docker run --rm fcp:ci --version
 
   official-sdk:
     name: Official SDK compatibility

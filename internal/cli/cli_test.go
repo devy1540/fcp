@@ -3,16 +3,18 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/hjyoon/fcp/internal/profile"
-	"github.com/hjyoon/fcp/internal/server"
-	"github.com/hjyoon/fcp/internal/state"
+	"github.com/devy1540/fcp/internal/profile"
+	"github.com/devy1540/fcp/internal/server"
+	"github.com/devy1540/fcp/internal/state"
 )
 
 func TestDoctorStatusResourcesAndVerify(t *testing.T) {
@@ -94,6 +96,101 @@ func TestSkillInstallIsSafeAndComplete(t *testing.T) {
 	if again.exitCode != 1 || !strings.Contains(again.stderr, `"code": "already_exists"`) {
 		t.Fatalf("second install exit=%d stdout=%s stderr=%s", again.exitCode, again.stdout, again.stderr)
 	}
+}
+
+func TestSnapshotCommands(t *testing.T) {
+	store, err := state.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateBucket("baseline"); err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(server.New(store))
+	defer httpServer.Close()
+
+	saved := runCLI(t, "snapshot", "save", "clean", "--endpoint", httpServer.URL)
+	if saved.exitCode != 0 || !saved.output.OK || !strings.Contains(saved.stdout, `"containsSensitiveData": true`) {
+		t.Fatalf("save exit=%d stdout=%s stderr=%s", saved.exitCode, saved.stdout, saved.stderr)
+	}
+	listed := runCLI(t, "snapshot", "list", "--endpoint", httpServer.URL)
+	if listed.exitCode != 0 || !strings.Contains(listed.stdout, `"name": "clean"`) || strings.Contains(listed.stdout, `"Buckets"`) {
+		t.Fatalf("list exit=%d stdout=%s stderr=%s", listed.exitCode, listed.stdout, listed.stderr)
+	}
+	loaded := runCLI(t, "snapshot", "load", "clean", "--endpoint", httpServer.URL)
+	if loaded.exitCode != 0 || !loaded.output.OK {
+		t.Fatalf("load exit=%d stdout=%s stderr=%s", loaded.exitCode, loaded.stdout, loaded.stderr)
+	}
+	deleted := runCLI(t, "snapshot", "delete", "clean", "--endpoint", httpServer.URL)
+	if deleted.exitCode != 0 || !strings.Contains(deleted.stdout, `"deleted": "clean"`) {
+		t.Fatalf("delete exit=%d stdout=%s stderr=%s", deleted.exitCode, deleted.stdout, deleted.stderr)
+	}
+}
+
+func TestExecStartsIsolatedRuntimeAndPropagatesExitCode(t *testing.T) {
+	sourceData := t.TempDir()
+	store, err := state.Open(sourceData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateBucket("snapshot-bucket"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveSnapshot("baseline"); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GO_WANT_FCP_EXEC_HELPER", "1")
+	success := runCLI(t,
+		"exec", "--snapshot", "baseline", "--data-dir", sourceData, "--profile", "demo", "--",
+		os.Args[0], "-test.run=TestExecHelperProcess", "--", "verify",
+	)
+	if success.exitCode != 0 {
+		t.Fatalf("exec exit=%d stdout=%s stderr=%s", success.exitCode, success.stdout, success.stderr)
+	}
+	failed := runCLI(t,
+		"exec", "--",
+		os.Args[0], "-test.run=TestExecHelperProcess", "--", "exit7",
+	)
+	if failed.exitCode != 7 {
+		t.Fatalf("exec did not propagate exit code: %d stderr=%s", failed.exitCode, failed.stderr)
+	}
+}
+
+func TestExecHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_FCP_EXEC_HELPER") != "1" {
+		return
+	}
+	mode := os.Args[len(os.Args)-1]
+	if mode == "exit7" {
+		os.Exit(7)
+	}
+	endpoint := os.Getenv("FCP_HTTP_ENDPOINT")
+	response, err := http.Get(endpoint + "/_fcp/dashboard?service=s3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "snapshot-bucket") {
+		t.Fatalf("snapshot unavailable status=%d body=%s", response.StatusCode, body)
+	}
+	credentials := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+	info, err := os.Stat(credentials)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("credentials path=%q mode=%v err=%v", credentials, infoMode(info), err)
+	}
+	os.Exit(0)
+}
+
+func infoMode(info os.FileInfo) os.FileMode {
+	if info == nil {
+		return 0
+	}
+	return info.Mode().Perm()
 }
 
 func TestUsageErrorsUseJSONAndExitTwo(t *testing.T) {

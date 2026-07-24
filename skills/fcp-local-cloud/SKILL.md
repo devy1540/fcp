@@ -1,6 +1,6 @@
 ---
 name: fcp-local-cloud
-description: Diagnose, configure, inspect, and verify the FCP lightweight AWS/GCP emulator through its machine-readable CLI. Use when an agent needs to start local cloud dependencies, generate emulator environment variables, check FCP health, inspect local resources without exposing payloads, interpret FULL/PARTIAL compatibility, or decide when real AWS/GCP verification is still required.
+description: Diagnose, configure, inspect, snapshot, and verify the FCP lightweight AWS/GCP emulator through its machine-readable CLI. Use when an agent needs to start isolated local cloud dependencies, generate emulator environment variables, check FCP health, inspect local resources without exposing payloads, manage repeatable test baselines, interpret FULL/PARTIAL compatibility, or decide when real AWS/GCP verification is still required.
 ---
 
 # FCP Local Cloud
@@ -36,6 +36,32 @@ fcp env all --format shell
 
 Inspect shell output before sourcing it. Keep generated credentials local and never print their contents.
 
+## Run isolated tests
+
+Prefer `fcp exec` when a command needs disposable FCP state:
+
+```bash
+fcp exec --profile demo -- ./gradlew test
+fcp exec --snapshot clean --data-dir .fcp --profile demo -- pnpm test
+```
+
+The command receives loopback HTTP and GCP gRPC endpoints through environment variables. FCP uses a temporary data directory, cleans it up after the command, and returns the command's exit code.
+
+## Manage test baselines
+
+Use the management API through the CLI:
+
+```bash
+fcp snapshot list --json
+fcp snapshot save clean --json
+fcp snapshot load clean --json
+fcp snapshot delete clean --json
+```
+
+`save` is immutable and fails when the name already exists. `load` replaces current local FCP state, and `delete` removes the named local snapshot. Only run `load` or `delete` when the user explicitly requests that mutation.
+
+Snapshots are checksummed but not encrypted. They can contain local Secret payloads and private key material. Never print their contents, commit them, or transfer them outside the trusted local workspace.
+
 ## Inspect resources
 
 Use the metadata-only resource view:
@@ -69,6 +95,6 @@ Use real AWS/GCP for IAM and signature enforcement, quotas, performance, multi-r
 ## Safety
 
 - Keep inspection read-only unless the user explicitly requests a local mutation.
-- Do not run reset, purge, delete, or scenario mutation commands without explicit scope.
+- Do not run reset, purge, snapshot load/delete, or scenario mutation commands without explicit scope.
 - Do not expose credentials, Secret values, key material, message bodies, prompts, or generated content.
 - Report the exact command, exit code, and failed checks when verification fails.

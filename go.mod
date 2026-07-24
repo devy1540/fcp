@@ -1,4 +1,4 @@
-module github.com/hjyoon/fcp
+module github.com/devy1540/fcp
 
 go 1.25.8
 

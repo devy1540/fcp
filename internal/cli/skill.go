@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	fcpSkills "github.com/hjyoon/fcp/skills"
+	fcpSkills "github.com/devy1540/fcp/skills"
 )
 
 const fcpSkillName = "fcp-local-cloud"

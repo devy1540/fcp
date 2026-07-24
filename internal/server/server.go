@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hjyoon/fcp/internal/state"
+	"github.com/devy1540/fcp/internal/state"
 )
 
 type Server struct {
@@ -132,6 +132,8 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		s.handleDashboardAPI(w, r)
 	case r.URL.Path == "/_fcp/actions":
 		s.handleDashboardAction(w, r)
+	case r.URL.Path == "/_fcp/snapshots":
+		s.handleSnapshots(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/_fcp/health":
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	case r.Method == http.MethodPost && r.URL.Path == "/_fcp/reset":

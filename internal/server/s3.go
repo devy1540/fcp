@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hjyoon/fcp/internal/state"
+	"github.com/devy1540/fcp/internal/state"
 )
 
 const s3Namespace = "http://s3.amazonaws.com/doc/2006-03-01/"
