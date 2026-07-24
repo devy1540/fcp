@@ -4,7 +4,7 @@
 
 ## 로컬 관리 대시보드
 
-`/_fcp/ui`에서 AWS와 GCP를 필터링·그룹화하고 각 서비스의 런타임 상태와 검증 등급을 별도로 확인할 수 있습니다. `READY`는 현재 프로세스가 요청에 응답할 수 있음을 뜻합니다. `공식 SDK 검증`은 명시된 실제 클라이언트 버전의 회귀 테스트, `HTTP 계약 검증`은 PODO가 직접 호출하는 HTTP 경로 테스트를 뜻하며 둘 다 전체 클라우드 동등성을 의미하지 않습니다. 서비스 상세에서는 이 문서에 대응하는 API별 `FULL`·`PARTIAL` 범위와 제외 범위를 확인할 수 있습니다. 첫 화면은 서비스 요약만 받고 서비스 선택 시 리소스를 25개씩 지연 조회하며, 검색과 이전·다음 페이지는 서버에서 처리합니다. 화면은 표시 중일 때 3초마다 자동 갱신하고 마지막 성공 응답이 10초를 넘으면 `STALE`로 표시합니다. 서비스별 리소스를 조회·검색하고 S3의 진행 중 멀티파트 업로드 수, SQS의 Standard/FIFO 유형·content dedup·DLQ 대상·최대 수신 횟수, DynamoDB 테이블 스키마·아이템 수와 SQS, Pub/Sub, FCM 메시지 상태, Vertex AI 생성 호출 메타데이터를 확인할 수 있습니다. S3 버킷, SQS Standard/FIFO 큐, DynamoDB 테이블, Cloud Storage 버킷, Pub/Sub Topic·Subscription의 생성·삭제를 지원하며 입력은 서버에서도 검증합니다. 모든 삭제는 확인 단계를 거치고 S3와 Cloud Storage 버킷은 비어 있지 않으면 `409 Conflict`로 거부합니다. 테스트 데이터 초기화는 Storage 객체와 미완료 멀티파트 업로드, 메시지, DynamoDB 아이템, FIFO dedup 기록, Firestore 문서, FCM 캡처와 Vertex AI 호출 기록만 삭제하며 리소스 구조, Secret, KMS와 IAM key material은 보존합니다. 대시보드 응답에는 Secret payload, DynamoDB 아이템, key material, 업로드 파트, 메시지 본문, AI 프롬프트와 생성 결과를 포함하지 않습니다.
+`/_fcp/ui`에서 AWS와 GCP를 필터링·그룹화하고 각 서비스의 런타임 상태와 검증 등급을 별도로 확인할 수 있습니다. `READY`는 현재 프로세스가 요청에 응답할 수 있음을 뜻합니다. `공식 SDK 검증`은 명시된 실제 클라이언트 버전의 회귀 테스트, `HTTP 계약 검증`은 명시된 HTTP 경로의 요청·응답 테스트를 뜻하며 둘 다 전체 클라우드 동등성을 의미하지 않습니다. 서비스 상세에서는 이 문서에 대응하는 API별 `FULL`·`PARTIAL` 범위와 제외 범위를 확인할 수 있습니다. 첫 화면은 서비스 요약만 받고 서비스 선택 시 리소스를 25개씩 지연 조회하며, 검색과 이전·다음 페이지는 서버에서 처리합니다. 화면은 표시 중일 때 3초마다 자동 갱신하고 마지막 성공 응답이 10초를 넘으면 `STALE`로 표시합니다. 서비스별 리소스를 조회·검색하고 S3의 진행 중 멀티파트 업로드 수, SQS의 Standard/FIFO 유형·content dedup·DLQ 대상·최대 수신 횟수, DynamoDB 테이블 스키마·아이템 수와 SQS, Pub/Sub, FCM 메시지 상태, Vertex AI 생성 호출 메타데이터를 확인할 수 있습니다. S3 버킷, SQS Standard/FIFO 큐, DynamoDB 테이블, Cloud Storage 버킷, Pub/Sub Topic·Subscription의 생성·삭제를 지원하며 입력은 서버에서도 검증합니다. 모든 삭제는 확인 단계를 거치고 S3와 Cloud Storage 버킷은 비어 있지 않으면 `409 Conflict`로 거부합니다. 테스트 데이터 초기화는 Storage 객체와 미완료 멀티파트 업로드, 메시지, DynamoDB 아이템, FIFO dedup 기록, Firestore 문서, FCM 캡처와 Vertex AI 호출 기록만 삭제하며 리소스 구조, Secret, KMS와 IAM key material은 보존합니다. 대시보드 응답에는 Secret payload, DynamoDB 아이템, key material, 업로드 파트, 메시지 본문, AI 프롬프트와 생성 결과를 포함하지 않습니다.
 
 ## S3
 
@@ -50,14 +50,14 @@
 - SigV4 서명과 자격 증명을 검증하지 않습니다.
 - 메타데이터는 JSON snapshot, 객체 본문은 별도 로컬 파일에 저장합니다.
 - 한 프로세스 안에서 동작하며 다중 노드·리전 장애를 재현하지 않습니다.
-- AWS 영역은 AWS CLI 2.x, JavaScript AWS SDK v3.1092.0과 PODO notification의 Java AWS SDK v2.33.9(DynamoDB·SQS·STS 동기/비동기 클라이언트)로 회귀 검증합니다.
+- AWS 영역은 AWS CLI 2.x, JavaScript AWS SDK v3.1092.0과 Java AWS SDK v2.33.9(DynamoDB·SQS·STS 동기/비동기 클라이언트)로 회귀 검증합니다.
 
 ## DynamoDB와 STS
 
 | API | 상태 | 검증 범위 |
 |---|---|---|
 | Create/Describe/List/DeleteTable | FULL | HASH/RANGE String·Number·Binary key schema, PAY_PER_REQUEST, 즉시 ACTIVE 상태 |
-| Put/Get/DeleteItem | PARTIAL | PODO 경로에서 쓰는 String·Number 중심 AttributeValue, 조건식, ReturnValues, 영속화 |
+| Put/Get/DeleteItem | PARTIAL | String·Number 중심 AttributeValue, 조건식, ReturnValues, 영속화 |
 | BatchGetItem | PARTIAL | 최대 100개 key, 여러 테이블, projection, 누락 item 생략. throttling이 없어 unprocessed key는 반환하지 않음 |
 | BatchWriteItem | PARTIAL | 최대 25개 Put/Delete, 여러 테이블, 단일 snapshot 저장. throttling이 없어 unprocessed item은 반환하지 않음 |
 | Query | PARTIAL | partition key equality, sort key equality·비교·between·begins_with, AND 필터, projection, limit/page key, 정방향·역방향 |
@@ -83,7 +83,7 @@
 
 미지원: ACL/IAM 정책, 조건부 generation 요청, checksum 입력 검증, object versioning, compose/copy/rewrite, lifecycle, retention/hold, Pub/Sub notification, 실제 GCS의 일관성·성능 특성.
 
-검증 클라이언트는 Go Storage v1.64.0, Java Storage v2.68.0, PODO 앱 lockfile의 JavaScript Storage v7.19.0입니다.
+검증 클라이언트는 Go Storage v1.64.0, Java Storage v2.68.0, JavaScript Storage v7.19.0입니다.
 
 ## GCP Pub/Sub
 
@@ -100,26 +100,26 @@
 
 미지원: push subscription 전달, filter/retry policy, exactly-once, snapshot/seek, schema, IAM 정책, configurable retention, 다중 노드 ordering 보장.
 
-검증 클라이언트는 `cloud.google.com/go/pubsub/v2` v2.6.1, Java Pub/Sub v1.140.1, PODO 앱 lockfile의 JavaScript Pub/Sub v4.11.0이며, 고수준 Publisher와 StreamingPull 기반 Subscriber까지 통과합니다.
+검증 클라이언트는 `cloud.google.com/go/pubsub/v2` v2.6.1, Java Pub/Sub v1.140.1, JavaScript Pub/Sub v4.11.0이며, 고수준 Publisher와 StreamingPull 기반 Subscriber까지 통과합니다.
 
 ## Firestore
 
-문서 CRUD/list, batch get/write, commit, transaction begin/rollback, equality/range/composite query, order/cursor/limit/offset/projection, increment/server timestamp/array union·remove/delete field를 지원합니다. 복합 인덱스 요구, 보안 규칙, watch/listen, aggregation과 실제 분산 transaction 충돌은 재현하지 않습니다. Go와 PODO notification의 Kotlin/Java Firestore SDK로 검증합니다.
+문서 CRUD/list, batch get/write, commit, transaction begin/rollback, equality/range/composite query, order/cursor/limit/offset/projection, increment/server timestamp/array union·remove/delete field를 지원합니다. 복합 인덱스 요구, 보안 규칙, watch/listen, aggregation과 실제 분산 transaction 충돌은 재현하지 않습니다. Go와 Kotlin/Java Firestore SDK로 검증합니다.
 
 ## Secret Manager
 
-Secret CRUD/list, version 추가/list/access, `latest`, enable/disable/destroy와 CRC32C를 지원합니다. gRPC SDK 외에 PODO Node 서버가 사용하는 HTTP/JSON `projects/*/secrets/*/versions/*:access`도 지원합니다. IAM 정책과 복제 리전 동작은 미지원입니다. Go, Java/Kotlin SDK와 JavaScript REST 호출로 검증합니다.
+Secret CRUD/list, version 추가/list/access, `latest`, enable/disable/destroy와 CRC32C를 지원합니다. gRPC SDK 외에 HTTP/JSON `projects/*/secrets/*/versions/*:access`도 지원합니다. IAM 정책과 복제 리전 동작은 미지원입니다. Go, Java/Kotlin SDK와 JavaScript REST 호출로 검증합니다.
 
 ## Cloud KMS와 IAM Credentials
 
-KMS key ring/key/version, AES-GCM encrypt/decrypt, RSA PKCS#1 SHA-256 sign/public key를 로컬 키로 제공합니다. PODO Node 서버가 사용하는 HTTP/JSON `:encrypt`와 `:decrypt`는 동일한 로컬 키 상태를 사용합니다. IAM Credentials는 access/id token, signBlob, signJwt를 제공합니다. 키는 FCP data directory 안에만 저장되며 HSM/IAM/audit 특성은 재현하지 않습니다.
+KMS key ring/key/version, AES-GCM encrypt/decrypt, RSA PKCS#1 SHA-256 sign/public key를 로컬 키로 제공합니다. HTTP/JSON `:encrypt`와 `:decrypt`는 gRPC API와 동일한 로컬 키 상태를 사용합니다. IAM Credentials는 access/id token, signBlob, signJwt를 제공합니다. 키는 FCP data directory 안에만 저장되며 HSM/IAM/audit 특성은 재현하지 않습니다.
 
 ## Compute Metadata
 
-PODO 서버가 사용하는 프로젝트 ID, 기본 서비스 계정 이메일, OAuth access token, audience 기반 identity token을 `Metadata-Flavor: Google` 계약과 함께 제공합니다. identity token 검증용 로컬 JWKS는 `/oauth2/v3/certs`에서 제공합니다. GCE 인스턴스 속성, 네트워크, startup script와 실제 Google IAM 권한은 재현하지 않습니다.
+프로젝트 ID, 기본 서비스 계정 이메일, OAuth access token, audience 기반 identity token을 `Metadata-Flavor: Google` 계약과 함께 제공합니다. identity token 검증용 로컬 JWKS는 `/oauth2/v3/certs`에서 제공합니다. GCE 인스턴스 속성, 네트워크, startup script와 실제 Google IAM 권한은 재현하지 않습니다.
 
 ## FCM과 Vertex AI
 
 FCM HTTP v1 `messages:send`는 외부 발송 없이 요청을 영속 캡처합니다. `fcp-error-unregistered*` 토큰은 재현 가능한 NOT_FOUND 오류를 반환합니다. Firebase의 전달·APNs/Android 플랫폼 동작은 미지원입니다.
 
-Vertex AI publisher model list와 Gemini Developer API model list, `generateContent`, `streamGenerateContent`를 지원합니다. 생성은 테스트가 항상 같은 결과를 얻도록 고정된 텍스트 또는 JSON 응답을 반환하고 `fcp-error-rate-limit`, `fcp-error-unavailable` 모델로 429·503 오류를 재현합니다. 호출 기록에는 프로젝트·리전·모델·작업·입력 문자 수·도구 수만 저장하며 프롬프트와 생성 결과 본문은 저장하지 않습니다. PODO backend가 사용하는 Google Gen AI Java SDK 1.58.0을 `GOOGLE_GEMINI_BASE_URL`로 연결해 검증합니다. 실제 모델 의미론, function/tool call 생성, 멀티모달 해석, safety 정책과 토큰 계산 정확도는 미지원입니다.
+Vertex AI publisher model list와 Gemini Developer API model list, `generateContent`, `streamGenerateContent`를 지원합니다. 생성은 테스트가 항상 같은 결과를 얻도록 고정된 텍스트 또는 JSON 응답을 반환하고 `fcp-error-rate-limit`, `fcp-error-unavailable` 모델로 429·503 오류를 재현합니다. 호출 기록에는 프로젝트·리전·모델·작업·입력 문자 수·도구 수만 저장하며 프롬프트와 생성 결과 본문은 저장하지 않습니다. Google Gen AI Java SDK 1.58.0을 `GOOGLE_GEMINI_BASE_URL`로 연결해 검증합니다. 실제 모델 의미론, function/tool call 생성, 멀티모달 해석, safety 정책과 토큰 계산 정확도는 미지원입니다.

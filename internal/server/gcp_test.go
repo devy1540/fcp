@@ -289,7 +289,7 @@ func TestFirestoreWithOfficialGoClient(t *testing.T) {
 	}
 	defer client.Close()
 
-	collection := client.Collection("podo-notification")
+	collection := client.Collection("notifications")
 	doc := collection.Doc("APP#one#CHECK")
 	if _, err := doc.Set(ctx, map[string]any{
 		"pk": "APP#one", "sk": "CHECK", "count": int64(1), "obsolete": "remove-me",
@@ -379,7 +379,7 @@ func TestSecretManagerWithOfficialGoClient(t *testing.T) {
 
 	parent := "projects/test-project"
 	secret, err := client.CreateSecret(ctx, &secretmanagerpb.CreateSecretRequest{
-		Parent: parent, SecretId: "podo-common",
+		Parent: parent, SecretId: "notifications",
 		Secret: &secretmanagerpb.Secret{Replication: &secretmanagerpb.Replication{Replication: &secretmanagerpb.Replication_Automatic_{Automatic: &secretmanagerpb.Replication_Automatic{}}}},
 	})
 	if err != nil {
@@ -427,12 +427,12 @@ func TestKMSWithOfficialGoClient(t *testing.T) {
 	defer client.Close()
 
 	location := "projects/test-project/locations/asia-northeast3"
-	keyRing, err := client.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{Parent: location, KeyRingId: "podo"})
+	keyRing, err := client.CreateKeyRing(ctx, &kmspb.CreateKeyRingRequest{Parent: location, KeyRingId: "demo"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	symmetric, err := client.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
-		Parent: keyRing.GetName(), CryptoKeyId: "pii-kek",
+		Parent: keyRing.GetName(), CryptoKeyId: "data-encryption",
 		CryptoKey: &kmspb.CryptoKey{Purpose: kmspb.CryptoKey_ENCRYPT_DECRYPT, VersionTemplate: &kmspb.CryptoKeyVersionTemplate{Algorithm: kmspb.CryptoKeyVersion_GOOGLE_SYMMETRIC_ENCRYPTION}},
 	})
 	if err != nil {

@@ -52,7 +52,7 @@ var dashboardVerificationSpecs = map[string]dashboardVerificationSpec{
 	"dynamodb": {
 		operations: []dashboardOperationVerification{
 			verifiedOperation("Create/Describe/List/DeleteTable", "FULL", "HASH/RANGE 키, PAY_PER_REQUEST와 즉시 ACTIVE"),
-			verifiedOperation("Put/Get/DeleteItem", "PARTIAL", "PODO String·Number 중심 값, 조건식과 ReturnValues"),
+			verifiedOperation("Put/Get/DeleteItem", "PARTIAL", "String·Number 중심 값, 조건식과 ReturnValues"),
 			verifiedOperation("BatchGet/BatchWriteItem", "PARTIAL", "요청 제한, 여러 테이블과 projection"),
 			verifiedOperation("Query/Scan", "PARTIAL", "조건, 필터, projection, limit와 page key"),
 			verifiedOperation("UpdateItem", "PARTIAL", "SET/REMOVE/ADD와 주요 조건식"),
@@ -106,14 +106,14 @@ var dashboardVerificationSpecs = map[string]dashboardVerificationSpec{
 			verifiedOperation("Secret CRUD/list", "FULL", "Secret 생성, 조회, 목록, 갱신과 삭제"),
 			verifiedOperation("Version add/list/access", "FULL", "버전과 latest 접근, CRC32C"),
 			verifiedOperation("Version state", "FULL", "enable, disable와 destroy"),
-			verifiedOperation("HTTP JSON access", "FULL", "PODO Node versions/*:access 경로"),
+			verifiedOperation("HTTP JSON access", "FULL", "versions/*:access 요청 경로"),
 		},
 		limitations: []string{"IAM 정책과 복제 리전 동작은 구현하지 않습니다.", "대시보드와 로그는 Secret payload를 노출하지 않습니다."},
 	},
 	"kms": {
 		operations: []dashboardOperationVerification{
 			verifiedOperation("Key ring/key/version", "FULL", "로컬 key lifecycle과 상태"),
-			verifiedOperation("Encrypt/decrypt", "FULL", "AES-GCM과 PODO HTTP JSON 경로"),
+			verifiedOperation("Encrypt/decrypt", "FULL", "AES-GCM과 HTTP JSON 요청 경로"),
 			verifiedOperation("Asymmetric sign/public key", "FULL", "RSA PKCS#1 SHA-256 서명과 공개키"),
 		},
 		limitations: []string{"HSM·IAM·audit 특성은 재현하지 않습니다.", "키 material은 FCP data directory 밖으로 반환하지 않습니다."},

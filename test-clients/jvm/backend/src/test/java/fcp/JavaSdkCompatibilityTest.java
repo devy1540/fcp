@@ -42,10 +42,10 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class JavaSdkCompatibilityTest {
-    private static final String PROJECT = "podo-local";
+    private static final String PROJECT = "fcp-local";
 
     @Test
-    void storageAndPubSubAdminUseOfficialPodoVersions() throws Exception {
+    void storageAndPubSubAdminUseOfficialDemoVersions() throws Exception {
         String httpEndpoint = required("FCP_HTTP_ENDPOINT");
         String grpcEndpoint = required("FCP_GCP_ENDPOINT");
 		String suffix = Long.toUnsignedString(System.nanoTime());
@@ -65,7 +65,7 @@ class JavaSdkCompatibilityTest {
 				.setTransportChannelProvider(transport)
 				.setCredentialsProvider(NoCredentialsProvider.create()).build();
 		try (IamCredentialsClient iam = IamCredentialsClient.create(iamSettings)) {
-			String email = "podo-storage-signer@podo-local.iam.gserviceaccount.com";
+			String email = "fcp-storage-signer@fcp-local.iam.gserviceaccount.com";
 			ServiceAccountSigner signer = new ServiceAccountSigner() {
 				@Override public String getAccount() { return email; }
 				@Override public byte[] sign(byte[] bytes) {

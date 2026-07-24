@@ -11,10 +11,10 @@ import (
 	"testing"
 )
 
-func TestDynamoDBPodoCoreLifecycle(t *testing.T) {
+func TestDynamoDBDemoCoreLifecycle(t *testing.T) {
 	server := newTestServer(t)
 	create := map[string]any{
-		"TableName": "podo-notification",
+		"TableName": "notifications",
 		"KeySchema": []map[string]string{
 			{"AttributeName": "pk", "KeyType": "HASH"},
 			{"AttributeName": "sk", "KeyType": "RANGE"},
@@ -40,7 +40,7 @@ func TestDynamoDBPodoCoreLifecycle(t *testing.T) {
 	putDynamoTestItem(t, server.URL, "APP#two", "Alpha", "prod", 5)
 
 	get := dynamoCall(t, server.URL, "GetItem", map[string]any{
-		"TableName": "podo-notification",
+		"TableName": "notifications",
 		"Key":       dynamoStringItem(map[string]string{"pk": "APP#one", "sk": "Alpha"}),
 	}, http.StatusOK)
 	item := get["Item"].(map[string]any)
@@ -49,7 +49,7 @@ func TestDynamoDBPodoCoreLifecycle(t *testing.T) {
 	}
 
 	query := dynamoCall(t, server.URL, "Query", map[string]any{
-		"TableName":              "podo-notification",
+		"TableName":              "notifications",
 		"KeyConditionExpression": "#pk = :pk AND begins_with(#sk, :prefix)",
 		"ExpressionAttributeNames": map[string]string{
 			"#pk": "pk", "#sk": "sk",
@@ -63,7 +63,7 @@ func TestDynamoDBPodoCoreLifecycle(t *testing.T) {
 	}
 
 	filtered := dynamoCall(t, server.URL, "Query", map[string]any{
-		"TableName":              "podo-notification",
+		"TableName":              "notifications",
 		"KeyConditionExpression": "pk = :pk",
 		"FilterExpression":       "#env = :env AND #count >= :minimum",
 		"ExpressionAttributeNames": map[string]string{
@@ -78,7 +78,7 @@ func TestDynamoDBPodoCoreLifecycle(t *testing.T) {
 	}
 
 	updated := dynamoCall(t, server.URL, "UpdateItem", map[string]any{
-		"TableName":        "podo-notification",
+		"TableName":        "notifications",
 		"Key":              dynamoStringItem(map[string]string{"pk": "APP#one", "sk": "Alpha"}),
 		"UpdateExpression": "SET #status = :status, #created = if_not_exists(#created, :created) ADD #count :increment REMOVE #env",
 		"ExpressionAttributeNames": map[string]string{
@@ -98,7 +98,7 @@ func TestDynamoDBPodoCoreLifecycle(t *testing.T) {
 	}
 
 	conditional := dynamoCallResponse(t, server.URL, "UpdateItem", map[string]any{
-		"TableName":                "podo-notification",
+		"TableName":                "notifications",
 		"Key":                      dynamoStringItem(map[string]string{"pk": "APP#one", "sk": "Alpha"}),
 		"UpdateExpression":         "SET #status = :next",
 		"ConditionExpression":      "#status = :expected",
@@ -113,7 +113,7 @@ func TestDynamoDBPodoCoreLifecycle(t *testing.T) {
 	conditional.Body.Close()
 
 	scan := dynamoCall(t, server.URL, "Scan", map[string]any{
-		"TableName":                 "podo-notification",
+		"TableName":                 "notifications",
 		"FilterExpression":          "#env = :env",
 		"ExpressionAttributeNames":  map[string]string{"#env": "env"},
 		"ExpressionAttributeValues": map[string]any{":env": map[string]string{"S": "prod"}},
@@ -124,7 +124,7 @@ func TestDynamoDBPodoCoreLifecycle(t *testing.T) {
 
 	batchGet := dynamoCall(t, server.URL, "BatchGetItem", map[string]any{
 		"RequestItems": map[string]any{
-			"podo-notification": map[string]any{
+			"notifications": map[string]any{
 				"Keys": []any{
 					dynamoStringItem(map[string]string{"pk": "APP#one", "sk": "Alpha"}),
 					dynamoStringItem(map[string]string{"pk": "APP#two", "sk": "Alpha"}),
@@ -135,14 +135,14 @@ func TestDynamoDBPodoCoreLifecycle(t *testing.T) {
 			},
 		},
 	}, http.StatusOK)
-	batchItems := batchGet["Responses"].(map[string]any)["podo-notification"].([]any)
+	batchItems := batchGet["Responses"].(map[string]any)["notifications"].([]any)
 	if len(batchItems) != 2 || len(batchGet["UnprocessedKeys"].(map[string]any)) != 0 {
 		t.Fatalf("unexpected BatchGetItem response: %+v", batchGet)
 	}
 
 	batchWrite := dynamoCall(t, server.URL, "BatchWriteItem", map[string]any{
 		"RequestItems": map[string]any{
-			"podo-notification": []any{
+			"notifications": []any{
 				map[string]any{"PutRequest": map[string]any{"Item": dynamoStringItem(map[string]string{"pk": "APP#batch", "sk": "CHECK"})}},
 				map[string]any{"DeleteRequest": map[string]any{"Key": dynamoStringItem(map[string]string{"pk": "APP#two", "sk": "Alpha"})}},
 			},
@@ -152,14 +152,14 @@ func TestDynamoDBPodoCoreLifecycle(t *testing.T) {
 		t.Fatalf("unexpected BatchWriteItem response: %+v", batchWrite)
 	}
 	deletedByBatch := dynamoCall(t, server.URL, "GetItem", map[string]any{
-		"TableName": "podo-notification",
+		"TableName": "notifications",
 		"Key":       dynamoStringItem(map[string]string{"pk": "APP#two", "sk": "Alpha"}),
 	}, http.StatusOK)
 	if _, exists := deletedByBatch["Item"]; exists {
 		t.Fatalf("BatchWriteItem did not delete item: %+v", deletedByBatch)
 	}
 	createdByBatch := dynamoCall(t, server.URL, "GetItem", map[string]any{
-		"TableName": "podo-notification",
+		"TableName": "notifications",
 		"Key":       dynamoStringItem(map[string]string{"pk": "APP#batch", "sk": "CHECK"}),
 	}, http.StatusOK)
 	if _, exists := createdByBatch["Item"]; !exists {
@@ -168,12 +168,12 @@ func TestDynamoDBPodoCoreLifecycle(t *testing.T) {
 
 	dynamoCall(t, server.URL, "TransactWriteItems", map[string]any{
 		"TransactItems": []any{
-			map[string]any{"Delete": map[string]any{"TableName": "podo-notification", "Key": dynamoStringItem(map[string]string{"pk": "APP#one", "sk": "Beta"})}},
-			map[string]any{"Put": map[string]any{"TableName": "podo-notification", "Item": dynamoStringItem(map[string]string{"pk": "APP#three", "sk": "CHECK"})}},
+			map[string]any{"Delete": map[string]any{"TableName": "notifications", "Key": dynamoStringItem(map[string]string{"pk": "APP#one", "sk": "Beta"})}},
+			map[string]any{"Put": map[string]any{"TableName": "notifications", "Item": dynamoStringItem(map[string]string{"pk": "APP#three", "sk": "CHECK"})}},
 		},
 	}, http.StatusOK)
 
-	described := dynamoCall(t, server.URL, "DescribeTable", map[string]string{"TableName": "podo-notification"}, http.StatusOK)
+	described := dynamoCall(t, server.URL, "DescribeTable", map[string]string{"TableName": "notifications"}, http.StatusOK)
 	if described["Table"].(map[string]any)["ItemCount"].(float64) != 3 {
 		t.Fatalf("unexpected item count after transaction: %+v", described)
 	}
@@ -181,8 +181,8 @@ func TestDynamoDBPodoCoreLifecycle(t *testing.T) {
 	if len(listed["TableNames"].([]any)) != 1 {
 		t.Fatalf("unexpected ListTables: %+v", listed)
 	}
-	dynamoCall(t, server.URL, "DeleteTable", map[string]string{"TableName": "podo-notification"}, http.StatusOK)
-	notFound := dynamoCallResponse(t, server.URL, "DescribeTable", map[string]string{"TableName": "podo-notification"})
+	dynamoCall(t, server.URL, "DeleteTable", map[string]string{"TableName": "notifications"}, http.StatusOK)
+	notFound := dynamoCallResponse(t, server.URL, "DescribeTable", map[string]string{"TableName": "notifications"})
 	if notFound.StatusCode != http.StatusBadRequest || notFound.Header.Get("x-amzn-ErrorType") != "ResourceNotFoundException" {
 		t.Fatalf("deleted table status=%d error=%q", notFound.StatusCode, notFound.Header.Get("x-amzn-ErrorType"))
 	}
@@ -209,7 +209,7 @@ func TestSTSGetCallerIdentity(t *testing.T) {
 func putDynamoTestItem(t *testing.T, endpoint, pk, sk, env string, count int) {
 	t.Helper()
 	dynamoCall(t, endpoint, "PutItem", map[string]any{
-		"TableName": "podo-notification",
+		"TableName": "notifications",
 		"Item": map[string]any{
 			"pk": map[string]string{"S": pk}, "sk": map[string]string{"S": sk}, "env": map[string]string{"S": env}, "count": map[string]string{"N": strconv.Itoa(count)},
 		},

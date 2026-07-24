@@ -21,14 +21,14 @@ class KotlinSdkCompatibilityTest {
     fun `Firestore and Secret Manager work from Kotlin`() {
         val endpoint = requireNotNull(System.getenv("FCP_GCP_ENDPOINT"))
         val firestoreOptions = FirestoreOptions.newBuilder()
-            .setProjectId("podo-local").setEmulatorHost(endpoint).build()
+            .setProjectId("fcp-local").setEmulatorHost(endpoint).build()
         assertEquals(endpoint, firestoreOptions.emulatorHost)
         val firestore = firestoreOptions.service
         try {
-            val ref = firestore.collection("podo-notification").document("APP#kotlin#CHECK")
+            val ref = firestore.collection("notifications").document("APP#kotlin#CHECK")
             ref.set(mapOf("reservationId" to 42L, "status" to "READY")).get()
             assertEquals("READY", ref.get().get().getString("status"))
-            assertEquals(1, firestore.collection("podo-notification").whereEqualTo("reservationId", 42L).get().get().size())
+            assertEquals(1, firestore.collection("notifications").whereEqualTo("reservationId", 42L).get().get().size())
         } finally {
             firestore.close()
         }
@@ -38,7 +38,7 @@ class KotlinSdkCompatibilityTest {
             .setTransportChannelProvider(FixedTransportChannelProvider.create(GrpcTransportChannel.create(channel)))
             .setCredentialsProvider(NoCredentialsProvider.create()).build()
         SecretManagerServiceClient.create(settings).use { client ->
-            val parent = "projects/podo-local"
+            val parent = "projects/fcp-local"
 			val secret = client.createSecret(CreateSecretRequest.newBuilder()
 				.setParent(parent).setSecretId("kotlin-secret-${System.nanoTime()}").setSecret(Secret.newBuilder().build()).build())
             client.addSecretVersion(AddSecretVersionRequest.newBuilder().setParent(secret.name)

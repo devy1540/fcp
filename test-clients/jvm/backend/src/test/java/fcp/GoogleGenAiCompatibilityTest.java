@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 class GoogleGenAiCompatibilityTest {
 
     @Test
-    void podoBackendGoogleGenAiVersionUsesEnvironmentBaseUrl() {
+    void demoBackendGoogleGenAiVersionUsesEnvironmentBaseUrl() {
         String endpoint = required("FCP_HTTP_ENDPOINT");
         assertEquals(endpoint, required("GOOGLE_GEMINI_BASE_URL"));
 

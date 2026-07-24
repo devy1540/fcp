@@ -27,7 +27,7 @@ jobs:
       - run: go test -count=1 -race ./...
       - run: go vet ./...
       - run: node --check internal/server/dashboard/app.js
-      - run: docker compose -f docker-compose.podo.yml config -q
+      - run: docker compose config -q
 
   official-sdk:
     name: Official SDK compatibility
@@ -51,7 +51,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: 9.2.0
-      - name: Start FCP with the PODO profile
+      - name: Start FCP with the demo profile
         run: |
           FCP_CI_DIR="$RUNNER_TEMP/fcp-ci"
           mkdir -p "$FCP_CI_DIR"
@@ -60,9 +60,9 @@ jobs:
             --listen 127.0.0.1:4566 \
             --gcp-listen 127.0.0.1:8085 \
             --data-dir "$FCP_CI_DIR/data" \
-            --profile podo \
-            --project podo-local \
-            --credentials-out "$FCP_CI_DIR/podo-local-credentials.json" \
+            --profile demo \
+            --project fcp-local \
+            --credentials-out "$FCP_CI_DIR/fcp-local-credentials.json" \
             >"$FCP_CI_DIR/fcp.log" 2>&1 &
           echo "$!" >"$FCP_CI_DIR/fcp.pid"
           for attempt in $(seq 1 30); do
@@ -73,7 +73,7 @@ jobs:
           done
           cat "$FCP_CI_DIR/fcp.log"
           exit 1
-      - name: Java and Kotlin PODO SDK tests
+      - name: Java and Kotlin SDK tests
         run: gradle -p test-clients/jvm test --no-daemon
         env:
           AWS_ACCESS_KEY_ID: test
@@ -84,7 +84,7 @@ jobs:
           FCP_GCP_ENDPOINT: 127.0.0.1:8085
           GOOGLE_GEMINI_BASE_URL: http://127.0.0.1:4566
           GOOGLE_API_KEY: fcp-local
-      - name: JavaScript PODO SDK tests
+      - name: JavaScript SDK tests
         working-directory: test-clients/javascript
         run: |
           pnpm install --frozen-lockfile
@@ -97,7 +97,7 @@ jobs:
           FCP_HTTP_ENDPOINT: http://127.0.0.1:4566
           STORAGE_EMULATOR_HOST: http://127.0.0.1:4566
           PUBSUB_EMULATOR_HOST: 127.0.0.1:8085
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/fcp-ci/podo-local-credentials.json
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/fcp-ci/fcp-local-credentials.json
       - name: Stop FCP and print logs on failure
         if: always()
         run: |

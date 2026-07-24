@@ -52,7 +52,7 @@ func writeUsage(output io.Writer) {
 	fmt.Fprintln(output, `FCP AI-friendly commands:
   fcp doctor [--endpoint URL] [--gcp-endpoint HOST:PORT] --json
   fcp status [--endpoint URL] --json
-  fcp env [podo-backend|podo-notification|podo-app|all] [--format json|shell]
+  fcp env [aws|gcp|all] [--format json|shell]
   fcp resources list --service ID [--provider AWS|GCP] [--query TEXT] --json
   fcp verify [--service ID] [--strict] --json
   fcp skill install [--target DIRECTORY]

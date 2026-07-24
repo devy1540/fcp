@@ -44,7 +44,7 @@ import software.amazon.awssdk.services.sts.StsClient;
 class AwsSdkCompatibilityTest {
 
     @Test
-    void podoNotificationSqsAsyncClientWorksWithFcp() {
+    void demoNotificationSqsAsyncClientWorksWithFcp() {
         String endpoint = System.getenv().getOrDefault("FCP_HTTP_ENDPOINT", "http://127.0.0.1:4566");
         var credentials = StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test"));
         var sqsBuilder = SqsAsyncClient.builder()
@@ -55,8 +55,8 @@ class AwsSdkCompatibilityTest {
         }
 
         try (var sqs = sqsBuilder.build()) {
-            String queueUrl = sqs.getQueueUrl(builder -> builder.queueName("notification-local")).join().queueUrl();
-            assertNotNull(sqs.getQueueUrl(builder -> builder.queueName("reserved-local")).join().queueUrl());
+            String queueUrl = sqs.getQueueUrl(builder -> builder.queueName("notifications")).join().queueUrl();
+            assertNotNull(sqs.getQueueUrl(builder -> builder.queueName("scheduled-jobs")).join().queueUrl());
             sqs.purgeQueue(builder -> builder.queueUrl(queueUrl)).join();
 
             sqs.sendMessage(builder -> builder
@@ -90,11 +90,11 @@ class AwsSdkCompatibilityTest {
     }
 
     @Test
-    void podoNotificationDynamoDbAndStsVersionsWorkWithFcp() {
+    void demoNotificationDynamoDbAndStsVersionsWorkWithFcp() {
         String endpoint = System.getenv().getOrDefault("FCP_HTTP_ENDPOINT", "http://127.0.0.1:4566");
         var credentials = StaticCredentialsProvider.create(AwsBasicCredentials.create("test", "test"));
         var endpointUri = URI.create(endpoint);
-        String tableName = "podo-notification-sdk-" + System.nanoTime();
+        String tableName = "notifications-sdk-" + System.nanoTime();
         var dynamoBuilder = DynamoDbClient.builder()
                 .region(Region.AP_NORTHEAST_2)
                 .credentialsProvider(credentials);

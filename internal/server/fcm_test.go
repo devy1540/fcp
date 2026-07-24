@@ -12,7 +12,7 @@ import (
 func TestFCMCapturesMessagesAndReturnsDeterministicErrors(t *testing.T) {
 	server := newTestServer(t)
 	requestBody := []byte(`{"message":{"token":"device-token","notification":{"title":"hello"},"data":{"reservationId":"42"}}}`)
-	response, err := http.Post(server.URL+"/v1/projects/podo-local/messages:send", "application/json", bytes.NewReader(requestBody))
+	response, err := http.Post(server.URL+"/v1/projects/fcp-local/messages:send", "application/json", bytes.NewReader(requestBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestFCMCapturesMessagesAndReturnsDeterministicErrors(t *testing.T) {
 		t.Fatal("FCM message name is empty")
 	}
 
-	listed, err := http.Get(server.URL + "/_fcp/fcm/messages?project=podo-local")
+	listed, err := http.Get(server.URL + "/_fcp/fcm/messages?project=fcp-local")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,11 +43,11 @@ func TestFCMCapturesMessagesAndReturnsDeterministicErrors(t *testing.T) {
 	if err := json.NewDecoder(listed.Body).Decode(&capture); err != nil {
 		t.Fatal(err)
 	}
-	if len(capture.Messages) != 1 || capture.Messages[0].Project != "podo-local" || !bytes.Contains(capture.Messages[0].Message, []byte(`"reservationId":"42"`)) {
+	if len(capture.Messages) != 1 || capture.Messages[0].Project != "fcp-local" || !bytes.Contains(capture.Messages[0].Message, []byte(`"reservationId":"42"`)) {
 		t.Fatalf("unexpected capture: %+v", capture)
 	}
 
-	errorResponse, err := http.Post(server.URL+"/v1/projects/podo-local/messages:send", "application/json", bytes.NewBufferString(`{"message":{"token":"fcp-error-unregistered-1"}}`))
+	errorResponse, err := http.Post(server.URL+"/v1/projects/fcp-local/messages:send", "application/json", bytes.NewBufferString(`{"message":{"token":"fcp-error-unregistered-1"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestFCMCapturesMessagesAndReturnsDeterministicErrors(t *testing.T) {
 
 func TestVertexModelList(t *testing.T) {
 	server := newTestServer(t)
-	response, err := http.Get(server.URL + "/v1/projects/podo-local/locations/asia-northeast3/publishers/google/models")
+	response, err := http.Get(server.URL + "/v1/projects/fcp-local/locations/asia-northeast3/publishers/google/models")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestVertexGenerateContentCapturesMetadataWithoutPrompt(t *testing.T) {
 		t.Fatalf("unexpected generation response: %+v", generated)
 	}
 
-	vertexResponse, err := http.Post(server.URL+"/v1beta1/projects/podo-local/locations/asia-northeast3/publishers/google/models/gemini-2.5-pro:generateContent", "application/json", bytes.NewReader(requestBody))
+	vertexResponse, err := http.Post(server.URL+"/v1beta1/projects/fcp-local/locations/asia-northeast3/publishers/google/models/gemini-2.5-pro:generateContent", "application/json", bytes.NewReader(requestBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestVertexGenerateContentCapturesMetadataWithoutPrompt(t *testing.T) {
 		t.Fatalf("unexpected Vertex generation status=%d", vertexResponse.StatusCode)
 	}
 
-	listed, err := http.Get(server.URL + "/_fcp/vertex/generations?project=podo-local")
+	listed, err := http.Get(server.URL + "/_fcp/vertex/generations?project=fcp-local")
 	if err != nil {
 		t.Fatal(err)
 	}
