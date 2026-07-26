@@ -14,7 +14,7 @@
 ![Google Cloud](https://img.shields.io/badge/Google_Cloud-9_services-4285F4?logo=googlecloud&logoColor=white)
 ![Local only](https://img.shields.io/badge/scope-local_%26_CI-475569)
 
-[빠른 시작](#빠른-시작) · [지원 서비스](#지원-서비스) · [CLI](#ai와-cli) · [신뢰도 기준](#신뢰도-기준) · [호환성 문서](docs/compatibility.md)
+[빠른 시작](#빠른-시작) · [지원 서비스](#지원-서비스) · [CLI](#ai와-cli) · [신뢰도 기준](#신뢰도-기준) · [신뢰성 설계](docs/reliability.md) · [호환성 문서](docs/compatibility.md)
 
 </div>
 
@@ -44,6 +44,8 @@ go run ./cmd/fcp \
   --project fcp-local \
   --credentials-out .fcp/fcp-local-credentials.json
 ```
+
+일반 실행은 시작할 때 저장된 객체의 SHA-256을 한 번 검증하는 `--integrity-mode startup`이 기본값입니다. 실행 중 외부 파일 변경까지 읽기마다 검사하려면 `--integrity-mode strict`를 사용합니다.
 
 | endpoint | 용도 |
 |---|---|
@@ -109,6 +111,7 @@ flowchart LR
 
 - 단일 Go 바이너리에 서버, 대시보드와 Codex Skill을 함께 포함합니다.
 - 상태 메타데이터는 JSON으로, 객체 본문과 로컬 키는 데이터 디렉터리에 저장합니다.
+- 동일 데이터 디렉터리는 한 FCP 프로세스만 열 수 있어 동시 writer로 인한 상태 손상을 시작 단계에서 차단합니다.
 - 기본 바인딩은 loopback이며 외부 AWS·GCP 데이터를 가져오지 않습니다.
 
 ## 로컬 대시보드
@@ -135,8 +138,9 @@ flowchart LR
 | `fcp resources list --service <id> --json` | 비민감 리소스 메타데이터 검색 및 페이지 조회 |
 | `fcp verify --service <id> --json` | 런타임과 선언된 호환성 근거 확인 |
 | `fcp verify --strict --json` | 선택 범위에 `PARTIAL`이 있으면 실패 처리 |
+| `fcp reliability --minimum 85 --json` | 로컬·CI 증거 신뢰도와 6개 평가 영역 확인 |
 | `fcp snapshot list\|save\|load\|delete` | 체크섬이 포함된 로컬 기준 상태 관리 |
-| `fcp exec -- <command>` | 임시 포트·데이터 디렉터리에서 테스트 명령 격리 실행 |
+| `fcp exec -- <command>` | 엄격한 객체 무결성 검사와 임시 데이터 디렉터리에서 테스트 명령 격리 실행 |
 | `fcp skill install --json` | Codex용 `fcp-local-cloud` Skill 설치 |
 
 ```bash
@@ -170,7 +174,7 @@ fcp snapshot delete clean --json
 
 `load`는 현재 로컬 상태를 교체하고 `delete`는 지정한 로컬 스냅샷을 제거합니다. 두 명령은 명시적으로 호출할 때만 수행됩니다.
 
-테스트 한 번만을 위한 FCP는 `exec`로 격리할 수 있습니다. 임의의 loopback 포트와 임시 데이터 디렉터리를 사용하고, 필요한 AWS·Google Cloud 환경 변수를 자식 프로세스에만 주입한 뒤 종료 시 정리합니다.
+테스트 한 번만을 위한 FCP는 `exec`로 격리할 수 있습니다. 임의의 loopback 포트와 임시 데이터 디렉터리를 사용하고, 필요한 AWS·Google Cloud 환경 변수와 `FCP_INTEGRITY_MODE=strict`를 자식 프로세스에만 주입한 뒤 종료 시 정리합니다. `exec`는 검증 용도이므로 일반 서버와 달리 `strict`가 기본값입니다.
 
 ```bash
 fcp exec \
@@ -262,6 +266,8 @@ curl -X POST http://127.0.0.1:4566/_fcp/reset
 
 FCP는 “응답한다”와 “호환성이 검증됐다”를 구분합니다.
 
+현재 `fcp.reliability/v1` 모델은 API 충실도 30점, 클라이언트 현실성 20점, 상태 내구성 20점, 실패 격리·동시성 15점, 보안·공급망 10점, 릴리스 추적성 5점으로 평가합니다. 권장 하한은 85점이며 핵심 영역이 기준 미달이면 가중 합계와 무관하게 최대 69점으로 제한합니다. 현재 점수와 계산식은 [신뢰도 점수 문서](docs/reliability.md)를 기준으로 합니다.
+
 | 표시 | 의미 |
 |---|---|
 | `READY` | 현재 로컬 프로세스가 요청을 받을 수 있음 |
@@ -272,12 +278,24 @@ FCP는 “응답한다”와 “호환성이 검증됐다”를 구분합니다.
 
 어떤 표시도 AWS·Google Cloud 전체와의 완전한 동등성을 의미하지 않습니다. CI는 Go 단위·통합·race 테스트와 실제 Java·Kotlin·JavaScript SDK 호환성 테스트를 실행합니다.
 
+상태 저장 계층은 다음 실패를 명시적으로 방어합니다.
+
+- `state.json` 저장 실패 시 전체 인메모리 상태를 마지막 커밋으로 되돌립니다.
+- S3·multipart·GCS 본문은 내용 세대별 파일로 기록하고 메타데이터 커밋 뒤 이전 세대를 정리합니다.
+- 시작 시 참조 파일의 크기와 SHA-256을 검사하고, 기존 데이터는 MD5/CRC32C 검증 후 SHA-256 메타데이터로 승격합니다.
+- 기본 `startup` 모드는 시작 시에만 검사해 일반 객체 읽기 비용을 유지하고, `strict` 모드는 S3·GCS·multipart 읽기와 스냅샷 저장 시 다시 검사합니다.
+- 스냅샷 restore journal이 객체 디렉터리 교체 전후의 프로세스 중단을 자동 복구합니다.
+- 데이터 디렉터리 단일 writer lock, 파일·디렉터리 `fsync`, 원자적 rename을 사용합니다.
+
 ```bash
-go test -count=1 ./...
-go test -count=1 -race ./...
-go vet ./...
-node --check internal/server/dashboard/app.js
+make verify
 ```
+
+CI는 `strict` 무결성 모드로 공식 SDK 테스트를 실행합니다. Go 테스트는 전체 패키지를 계측해 72%를, Java·Kotlin·JavaScript 공식 SDK가 실제 서버 패키지(`cmd/fcp`, `profile`, `runtime`, `server`, `state`)에서 실행한 경로는 40%를 최소 하한으로 강제합니다. 커버리지는 신뢰도 점수가 아니라 테스트가 사라지는 회귀를 막는 하한선이며, SDK 테스트는 Gradle 캐시와 무관하게 매번 다시 실행합니다.
+
+호출 경로와 가져온 Go 패키지의 알려진 취약점, 컨테이너의 수정 가능한 HIGH/CRITICAL 취약점도 실패 처리합니다. 외부 GitHub Actions와 Docker 베이스 이미지는 불변 커밋·다이제스트로 고정하고, JVM 공식 SDK 테스트는 dependency lockfile을 사용합니다. JavaScript audit 예외는 [정확한 패키지·경로·버전과 만료일](test-clients/javascript/audit-policy.json)이 일치할 때만 허용하며 HIGH/CRITICAL 예외는 금지합니다. Dependabot이 Go·Actions·Docker·npm·Gradle 갱신을 매주 확인합니다.
+
+호환성 카탈로그를 바꾼 경우 `make compatibility`로 문서를 갱신합니다. 자세한 보장 범위와 새 API가 통과해야 할 검증 기준은 [신뢰성 설계](docs/reliability.md)에 정리되어 있습니다. GitHub Actions의 `Release` 워크플로는 CI의 전체 품질 게이트를 다시 통과한 소스만 사용합니다. 수동 실행 시 외부 게시 없이 바이너리, 체크섬, 멀티 아키텍처 이미지와 SBOM·provenance 생성을 dry-run하고, 태그 릴리스는 생성한 바이너리와 이미지의 GitHub attestation을 다시 검증한 뒤 게시합니다.
 
 ## Docker
 
@@ -302,6 +320,7 @@ docker run --rm -p 4566:4566 -p 8085:8085 ghcr.io/devy1540/fcp:latest
 > FCP는 로컬 개발 및 CI 전용입니다. AWS 자격 증명과 SigV4 서명을 검증하지 않으므로 신뢰할 수 없는 네트워크나 프로덕션 환경에 노출하지 마십시오.
 
 - 계정 ID는 `000000000000`, 기본 리전은 `us-east-1`로 고정됩니다.
+- 같은 데이터 디렉터리를 공유하는 다중 프로세스 실행은 지원하지 않으며 두 번째 프로세스는 시작을 거부합니다.
 - 다중 노드, 리전 장애, 실제 클라우드의 성능·일관성·quota는 재현하지 않습니다.
 - FCM은 외부로 발송하지 않고 요청을 로컬에 캡처합니다.
 - Vertex AI / Gemini는 테스트가 반복 가능하도록 결정적인 로컬 응답을 반환합니다.

@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/devy1540/fcp/internal/reliability"
 )
 
 const schemaVersion = "fcp.cli/v1"
@@ -38,6 +40,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return runResources(args[1:], stdout, stderr)
 	case "verify":
 		return runVerify(args[1:], stdout, stderr)
+	case "reliability":
+		return runReliability(args[1:], stdout, stderr)
 	case "skill":
 		return runSkill(args[1:], stdout, stderr)
 	case "snapshot":
@@ -60,8 +64,9 @@ func writeUsage(output io.Writer) {
   fcp env [aws|gcp|all] [--format json|shell]
   fcp resources list --service ID [--provider AWS|GCP] [--query TEXT] --json
   fcp verify [--service ID] [--strict] --json
+  fcp reliability [--minimum 0..100] [--endpoint URL] --json
   fcp snapshot list|save NAME|load NAME|delete NAME [--endpoint URL] --json
-  fcp exec [--snapshot NAME] [--data-dir DIRECTORY] [--profile demo] -- COMMAND [ARGS...]
+  fcp exec [--snapshot NAME] [--data-dir DIRECTORY] [--profile demo] [--integrity-mode strict|startup] -- COMMAND [ARGS...]
   fcp skill install [--target DIRECTORY]
 
 Run fcp without a subcommand to start the local emulator.`)
@@ -193,11 +198,12 @@ func isConnectionError(err error) bool {
 }
 
 type dashboardResponse struct {
-	Project     string             `json:"project"`
-	GeneratedAt time.Time          `json:"generatedAt"`
-	Summary     dashboardSummary   `json:"summary"`
-	Services    []dashboardService `json:"services"`
-	Page        *dashboardPage     `json:"page,omitempty"`
+	Project     string                 `json:"project"`
+	GeneratedAt time.Time              `json:"generatedAt"`
+	Summary     dashboardSummary       `json:"summary"`
+	Reliability reliability.Assessment `json:"reliability"`
+	Services    []dashboardService     `json:"services"`
+	Page        *dashboardPage         `json:"page,omitempty"`
 }
 
 type dashboardSummary struct {

@@ -10,17 +10,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/devy1540/fcp/internal/compatibility"
+	"github.com/devy1540/fcp/internal/reliability"
 )
 
 //go:embed dashboard/*
 var dashboardAssets embed.FS
 
 type dashboardResponse struct {
-	Project     string             `json:"project"`
-	GeneratedAt time.Time          `json:"generatedAt"`
-	Summary     dashboardSummary   `json:"summary"`
-	Services    []dashboardService `json:"services"`
-	Page        *dashboardPage     `json:"page,omitempty"`
+	Project     string                 `json:"project"`
+	GeneratedAt time.Time              `json:"generatedAt"`
+	Summary     dashboardSummary       `json:"summary"`
+	Reliability reliability.Assessment `json:"reliability"`
+	Services    []dashboardService     `json:"services"`
+	Page        *dashboardPage         `json:"page,omitempty"`
 }
 
 type dashboardSummary struct {
@@ -97,6 +101,8 @@ func (s *Server) handleDashboardAPI(w http.ResponseWriter, r *http.Request) {
 		// The unfiltered response is retained for API compatibility and diagnostics.
 	case "summary":
 		dashboard = dashboardSummaryView(dashboard)
+	case "reliability":
+		dashboard = dashboardReliabilityView(dashboard)
 	case "service":
 		var err error
 		dashboard, err = dashboardServiceView(dashboard, r.URL.Query().Get("service"), r.URL.Query().Get("q"), r.URL.Query().Get("limit"), r.URL.Query().Get("offset"))
@@ -150,21 +156,7 @@ func (s *Server) handleDashboardUI(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dashboardSnapshot() dashboardResponse {
-	services := []dashboardService{
-		{ID: "s3", Name: "S3", Provider: "AWS", Description: "버킷과 객체 저장 상태", Status: "READY", Verification: dashboardVerificationFor("s3", "SDK", "AWS SDK JavaScript v3.1092.0"), Resources: []dashboardResource{}},
-		{ID: "sqs", Name: "SQS", Provider: "AWS", Description: "큐와 대기 메시지 상태", Status: "READY", Verification: dashboardVerificationFor("sqs", "SDK", "AWS SDK JavaScript v3.1092.0 · Java v2.33.9"), Resources: []dashboardResource{}},
-		{ID: "dynamodb", Name: "DynamoDB", Provider: "AWS", Description: "테이블 스키마와 저장 아이템 상태", Status: "READY", Verification: dashboardVerificationFor("dynamodb", "SDK", "AWS SDK Java v2.33.9"), Resources: []dashboardResource{}},
-		{ID: "sts", Name: "STS", Provider: "AWS", Description: "로컬 AWS 호출자 identity", Status: "READY", Verification: dashboardVerificationFor("sts", "SDK", "AWS SDK Java v2.33.9"), Resources: []dashboardResource{}},
-		{ID: "gcs", Name: "Cloud Storage", Provider: "GCP", Description: "버킷과 객체 저장 상태", Status: "READY", Verification: dashboardVerificationFor("gcs", "SDK", "Storage Go v1.64.0 · Java v2.68.0 · JavaScript v7.19.0"), Resources: []dashboardResource{}},
-		{ID: "pubsub", Name: "Pub/Sub", Provider: "GCP", Description: "토픽, 구독과 미확인 메시지", Status: "READY", Verification: dashboardVerificationFor("pubsub", "SDK", "Pub/Sub Go v2.6.1 · Java v1.140.1 · JavaScript v4.11.0"), Resources: []dashboardResource{}},
-		{ID: "firestore", Name: "Firestore", Provider: "GCP", Description: "저장된 문서 메타데이터", Status: "READY", Verification: dashboardVerificationFor("firestore", "SDK", "Firestore Go v1.24.0 · Kotlin/Java"), Resources: []dashboardResource{}},
-		{ID: "secrets", Name: "Secret Manager", Provider: "GCP", Description: "값을 제외한 Secret과 버전 상태", Status: "READY", Verification: dashboardVerificationFor("secrets", "SDK", "Secret Manager Go v1.21.0 · Java v2.52.0/v2.59.0"), Resources: []dashboardResource{}},
-		{ID: "kms", Name: "Cloud KMS", Provider: "GCP", Description: "키링, 키와 버전 상태", Status: "READY", Verification: dashboardVerificationFor("kms", "SDK", "Cloud KMS Go v1.31.0 · Java v2.96.0"), Resources: []dashboardResource{}},
-		{ID: "iam", Name: "IAM Credentials", Provider: "GCP", Description: "개인키를 제외한 로컬 서비스 계정", Status: "READY", Verification: dashboardVerificationFor("iam", "SDK", "IAM Credentials Go v1.12.0 · Java v2.51.0"), Resources: []dashboardResource{}},
-		{ID: "fcm", Name: "FCM", Provider: "GCP", Description: "외부 발송 없이 캡처된 요청", Status: "READY", Verification: dashboardVerificationFor("fcm", "CONTRACT", "FCM HTTP v1 요청 경로"), Resources: []dashboardResource{}},
-		{ID: "metadata", Name: "Compute Metadata", Provider: "GCP", Description: "로컬 프로젝트와 서비스 계정 identity", Status: "READY", Verification: dashboardVerificationFor("metadata", "CONTRACT", "Metadata REST · JWKS 경로"), Resources: []dashboardResource{}},
-		{ID: "vertex", Name: "Vertex AI", Provider: "GCP", Description: "모델 목록과 로컬 생성 호출 상태", Status: "READY", Verification: dashboardVerificationFor("vertex", "SDK", "Google Gen AI Java v1.58.0"), Resources: []dashboardResource{}},
-	}
+	services := dashboardServicesFromCatalog(compatibility.Services())
 	byID := make(map[string]*dashboardService, len(services))
 	for i := range services {
 		byID[services[i].ID] = &services[i]
@@ -386,6 +378,7 @@ func (s *Server) dashboardSnapshot() dashboardResponse {
 	return dashboardResponse{
 		Project:     s.projectID,
 		GeneratedAt: time.Now().UTC(),
+		Reliability: reliability.Assess(compatibility.Services()),
 		Summary: dashboardSummary{
 			ServiceCount: len(services), AWSServiceCount: awsServiceCount, GCPServiceCount: gcpServiceCount,
 			SDKVerifiedCount: sdkVerifiedCount, ContractVerifiedCount: contractVerifiedCount,
@@ -397,11 +390,21 @@ func (s *Server) dashboardSnapshot() dashboardResponse {
 
 func dashboardSummaryView(dashboard dashboardResponse) dashboardResponse {
 	dashboard.Page = nil
+	for i := range dashboard.Reliability.Dimensions {
+		dashboard.Reliability.Dimensions[i].Criteria = nil
+	}
+	dashboard.Reliability.Limitations = nil
 	for i := range dashboard.Services {
 		dashboard.Services[i].Resources = nil
 		dashboard.Services[i].Verification.Operations = nil
 		dashboard.Services[i].Verification.Limitations = nil
 	}
+	return dashboard
+}
+
+func dashboardReliabilityView(dashboard dashboardResponse) dashboardResponse {
+	dashboard.Page = nil
+	dashboard.Services = nil
 	return dashboard
 }
 

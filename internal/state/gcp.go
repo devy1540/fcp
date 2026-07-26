@@ -27,6 +27,7 @@ type GCSObject struct {
 	Name           string            `json:"name"`
 	Bucket         string            `json:"bucket"`
 	Size           int64             `json:"size"`
+	SHA256         string            `json:"sha256,omitempty"`
 	ContentType    string            `json:"contentType,omitempty"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
 	ETag           string            `json:"etag"`
@@ -178,8 +179,9 @@ func (s *Store) PutGCSObject(bucket, name string, body []byte, contentType strin
 	if !ok {
 		return GCSObject{}, ErrGCSBucketNotFound
 	}
-	hash := sha256.Sum256([]byte("gcs\x00" + bucket + "\x00" + name))
-	file := hex.EncodeToString(hash[:])
+	previous, replaced := b.Objects[name]
+	contentHash := sha256.Sum256(body)
+	file := generationObjectFile("gcs", bucket, name, contentHash)
 	tmp, err := os.CreateTemp(s.objects, ".gcs-object-*")
 	if err != nil {
 		return GCSObject{}, err
@@ -200,6 +202,12 @@ func (s *Store) PutGCSObject(bucket, name string, body []byte, contentType strin
 	if err := os.Rename(tmpName, filepath.Join(s.objects, file)); err != nil {
 		return GCSObject{}, err
 	}
+	if err := syncDirectory(s.objects); err != nil {
+		if !replaced || previous.File != file {
+			_ = os.Remove(filepath.Join(s.objects, file))
+		}
+		return GCSObject{}, err
+	}
 	now := s.now().UTC()
 	generation := now.UnixNano()
 	created := now
@@ -214,10 +222,17 @@ func (s *Store) PutGCSObject(bucket, name string, body []byte, contentType strin
 	crc := crc32.Checksum(body, crc32.MakeTable(crc32.Castagnoli))
 	crcBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(crcBytes, crc)
-	obj := GCSObject{Name: name, Bucket: bucket, Size: int64(len(body)), ContentType: contentType, Metadata: cloneStringMap(metadata), ETag: base64.StdEncoding.EncodeToString(md5sum[:]), MD5Hash: base64.StdEncoding.EncodeToString(md5sum[:]), CRC32C: base64.StdEncoding.EncodeToString(crcBytes), CreatedAt: created, UpdatedAt: now, Generation: generation, Metageneration: metageneration, File: file}
+	obj := GCSObject{Name: name, Bucket: bucket, Size: int64(len(body)), SHA256: hex.EncodeToString(contentHash[:]), ContentType: contentType, Metadata: cloneStringMap(metadata), ETag: base64.StdEncoding.EncodeToString(md5sum[:]), MD5Hash: base64.StdEncoding.EncodeToString(md5sum[:]), CRC32C: base64.StdEncoding.EncodeToString(crcBytes), CreatedAt: created, UpdatedAt: now, Generation: generation, Metageneration: metageneration, File: file}
 	b.Objects[name] = obj
 	if err := s.saveLocked(); err != nil {
+		if !replaced || previous.File != file {
+			_ = os.Remove(filepath.Join(s.objects, file))
+		}
 		return GCSObject{}, err
+	}
+	if replaced && previous.File != file {
+		_ = os.Remove(filepath.Join(s.objects, previous.File))
+		_ = syncDirectory(s.objects)
 	}
 	return obj, nil
 }
@@ -233,7 +248,7 @@ func (s *Store) GCSObject(bucket, name string) (GCSObject, []byte, error) {
 	if !ok {
 		return GCSObject{}, nil, ErrGCSObjectNotFound
 	}
-	body, err := os.ReadFile(filepath.Join(s.objects, obj.File))
+	body, err := s.readObjectBody(obj.File, obj.Size, obj.SHA256)
 	return obj, body, err
 }
 
@@ -301,7 +316,6 @@ func (s *Store) DeleteGCSObject(bucket, name string) error {
 	}
 	delete(b.Objects, name)
 	if err := s.saveLocked(); err != nil {
-		b.Objects[name] = obj
 		return err
 	}
 	_ = os.Remove(filepath.Join(s.objects, obj.File))
@@ -427,13 +441,8 @@ func (s *Store) PurgePubSubSubscription(name string) error {
 	if !ok {
 		return ErrPubSubSubscriptionNotFound
 	}
-	previous := subscription.Messages
 	subscription.Messages = []PubSubMessage{}
-	if err := s.saveLocked(); err != nil {
-		subscription.Messages = previous
-		return err
-	}
-	return nil
+	return s.saveLocked()
 }
 
 func (s *Store) PublishPubSub(topic string, messages []PubSubMessage) ([]string, error) {

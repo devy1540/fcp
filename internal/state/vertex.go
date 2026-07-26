@@ -34,7 +34,6 @@ func (s *Store) RecordVertexGeneration(project, location, model, operation strin
 	}
 	s.data.VertexGenerations = append(s.data.VertexGenerations, recorded)
 	if err := s.saveLocked(); err != nil {
-		s.data.VertexGenerations = s.data.VertexGenerations[:len(s.data.VertexGenerations)-1]
 		return VertexGeneration{}, err
 	}
 	return recorded, nil
@@ -56,11 +55,6 @@ func (s *Store) ListVertexGenerations(project string) []VertexGeneration {
 func (s *Store) ClearVertexGenerations() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	previous := s.data.VertexGenerations
 	s.data.VertexGenerations = []VertexGeneration{}
-	if err := s.saveLocked(); err != nil {
-		s.data.VertexGenerations = previous
-		return err
-	}
-	return nil
+	return s.saveLocked()
 }

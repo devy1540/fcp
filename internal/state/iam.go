@@ -60,7 +60,6 @@ func (s *Store) IAMServiceAccount(name string, generate func() ([]byte, error)) 
 	}
 	s.data.IAMServiceAccounts[name] = account
 	if err := s.saveLocked(); err != nil {
-		delete(s.data.IAMServiceAccounts, name)
 		return IAMServiceAccount{}, err
 	}
 	cloned := *account

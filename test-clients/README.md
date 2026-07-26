@@ -4,12 +4,13 @@
 
 - JVM: Storage 2.68.0, Pub/Sub 1.140.1, KMS 2.96.0, Google Gen AI 1.58.0, Spring Cloud GCP BOM 7.4.6/Secret Manager 2.59.0, AWS DynamoDB·SQS·STS 2.33.9를 사용한다. FCM HTTP v1 요청 형식도 함께 검증한다.
 - Kotlin: 같은 JVM 공식 SDK로 Firestore와 Secret Manager를 검증한다.
-- JavaScript: AWS SDK v3.1092.0의 S3/SQS, `lib-storage` 멀티파트 업로드와 SQS DLQ redrive/FIFO ordering/deduplication, Storage 7.19.0/Pub/Sub 4.11.0을 사용하고, Metadata Server·Secret Manager REST·KMS REST 호출을 검증한다.
+- JavaScript: AWS SDK v3.1092.0의 S3/SQS, `lib-storage` 멀티파트 업로드와 SQS DLQ redrive/FIFO ordering/deduplication, Storage 7.21.0/Pub/Sub 5.3.1을 사용하고, Metadata Server·Secret Manager REST·KMS REST 호출을 검증한다.
 
 FCP를 먼저 실행한 뒤 테스트한다.
 
 ```bash
 go run ./cmd/fcp \
+  --integrity-mode strict \
   --profile demo \
   --project fcp-local \
   --credentials-out .fcp/fcp-local-credentials.json
@@ -32,3 +33,5 @@ AWS_ENDPOINT_URL=http://127.0.0.1:4566 \
 GOOGLE_APPLICATION_CREDENTIALS=$PWD/../../.fcp/fcp-local-credentials.json \
 pnpm test
 ```
+
+CI는 `pnpm audit --json` 결과가 [`audit-policy.json`](javascript/audit-policy.json)의 단일 test-only 예외와 정확히 일치하는지도 검사합니다. 예외의 패키지·버전·의존 경로가 바뀌거나 새 advisory가 추가되거나 만료일이 지나면 실패하며 HIGH/CRITICAL advisory는 예외 처리할 수 없습니다.

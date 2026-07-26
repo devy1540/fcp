@@ -114,7 +114,6 @@ func (s *Store) CreateDynamoTable(name string, keySchema []DynamoKeySchemaElemen
 	}
 	s.data.DynamoTables[name] = table
 	if err := s.saveLocked(); err != nil {
-		delete(s.data.DynamoTables, name)
 		return DynamoTable{}, err
 	}
 	return cloneDynamoTable(table), nil
@@ -213,11 +212,6 @@ func (s *Store) DynamoPutItem(tableName string, item DynamoItem, condition Dynam
 	}
 	table.Items[key] = cloneDynamoItem(item)
 	if err := s.saveLocked(); err != nil {
-		if existed {
-			table.Items[key] = old
-		} else {
-			delete(table.Items, key)
-		}
 		return nil, false, err
 	}
 	return cloneDynamoItem(old), existed, nil
@@ -243,7 +237,6 @@ func (s *Store) DynamoDeleteItem(tableName string, keyItem DynamoItem, condition
 	}
 	delete(table.Items, key)
 	if err := s.saveLocked(); err != nil {
-		table.Items[key] = old
 		return nil, false, err
 	}
 	return cloneDynamoItem(old), true, nil
@@ -281,11 +274,6 @@ func (s *Store) DynamoUpdateItem(tableName string, keyItem DynamoItem, condition
 	}
 	table.Items[key] = cloneDynamoItem(next)
 	if err := s.saveLocked(); err != nil {
-		if existed {
-			table.Items[key] = old
-		} else {
-			delete(table.Items, key)
-		}
 		return nil, nil, err
 	}
 	return cloneDynamoItem(old), cloneDynamoItem(next), nil
@@ -302,12 +290,16 @@ func (s *Store) DynamoTransactWrite(operations []DynamoWriteOperation) error {
 	resolvedOps := make([]resolved, 0, len(operations))
 	seen := map[string]bool{}
 	for _, operation := range operations {
+		kind := strings.ToLower(operation.Kind)
+		if kind != "put" && kind != "delete" {
+			return fmt.Errorf("%w: unsupported transaction operation", ErrDynamoValidation)
+		}
 		table, ok := s.data.DynamoTables[operation.Table]
 		if !ok {
 			return ErrDynamoTableNotFound
 		}
 		candidate := operation.Key
-		if strings.EqualFold(operation.Kind, "put") {
+		if kind == "put" {
 			candidate = operation.Item
 		}
 		key, err := dynamoItemKey(table, candidate)
@@ -319,31 +311,18 @@ func (s *Store) DynamoTransactWrite(operations []DynamoWriteOperation) error {
 			return fmt.Errorf("%w: transaction contains multiple operations for one item", ErrDynamoValidation)
 		}
 		seen[identity] = true
+		operation.Kind = kind
 		resolvedOps = append(resolvedOps, resolved{table: table, key: key, op: operation})
 	}
-	backup := make([]struct {
-		item   DynamoItem
-		exists bool
-	}, len(resolvedOps))
-	for index, operation := range resolvedOps {
-		backup[index].item, backup[index].exists = operation.table.Items[operation.key]
-		switch strings.ToLower(operation.op.Kind) {
+	for _, operation := range resolvedOps {
+		switch operation.op.Kind {
 		case "put":
 			operation.table.Items[operation.key] = cloneDynamoItem(operation.op.Item)
 		case "delete":
 			delete(operation.table.Items, operation.key)
-		default:
-			return fmt.Errorf("%w: unsupported transaction operation", ErrDynamoValidation)
 		}
 	}
 	if err := s.saveLocked(); err != nil {
-		for index, operation := range resolvedOps {
-			if backup[index].exists {
-				operation.table.Items[operation.key] = backup[index].item
-			} else {
-				delete(operation.table.Items, operation.key)
-			}
-		}
 		return err
 	}
 	return nil

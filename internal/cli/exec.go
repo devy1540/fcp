@@ -25,6 +25,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	dataDir := flags.String("data-dir", ".fcp", "source FCP data directory")
 	profileName := flags.String("profile", "", "optional seed profile (supported: demo)")
 	projectID := flags.String("project", "fcp-local", "GCP project ID")
+	integrityModeFlag := flags.String("integrity-mode", string(state.IntegrityModeStrict), "object integrity mode: startup or strict")
 	if err := flags.Parse(args); err != nil {
 		writeCLIError(stderr, "exec", "invalid_arguments", err.Error())
 		return 2
@@ -36,6 +37,11 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	}
 	if *profileName != "" && *profileName != "demo" {
 		writeCLIError(stderr, "exec", "invalid_profile", "profile must be demo or empty")
+		return 2
+	}
+	integrityMode, err := state.ParseIntegrityMode(*integrityModeFlag)
+	if err != nil {
+		writeCLIError(stderr, "exec", "invalid_integrity_mode", err.Error())
 		return 2
 	}
 
@@ -72,6 +78,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 		Profile:        *profileName,
 		ProjectID:      *projectID,
 		CredentialsOut: credentialsPath,
+		IntegrityMode:  integrityMode,
 		Logger:         log.New(stderr, "fcp exec: ", log.LstdFlags),
 	})
 	if err != nil {
@@ -82,6 +89,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 
 	variables, _ := providerEnvironment("all", fcpRuntime.HTTPEndpoint(), fcpRuntime.GCPAddress(), *projectID, credentialsPath)
 	variables["FCP_DATA_DIR"] = isolatedDataDir
+	variables["FCP_INTEGRITY_MODE"] = string(integrityMode)
 	command := exec.Command(commandArgs[0], commandArgs[1:]...)
 	command.Stdin = os.Stdin
 	command.Stdout = stdout

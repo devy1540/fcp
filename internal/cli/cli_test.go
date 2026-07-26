@@ -57,6 +57,19 @@ func TestDoctorStatusResourcesAndVerify(t *testing.T) {
 	if strict.exitCode != 1 || strict.output.OK {
 		t.Fatalf("strict verify exit=%d stdout=%s stderr=%s", strict.exitCode, strict.stdout, strict.stderr)
 	}
+
+	reliability := runCLI(t, "reliability", "--endpoint", httpServer.URL, "--json")
+	if reliability.exitCode != 0 || !reliability.output.OK || !strings.Contains(reliability.stdout, `"score": 92`) || !strings.Contains(reliability.stdout, `"rating": "HIGH"`) {
+		t.Fatalf("reliability exit=%d stdout=%s stderr=%s", reliability.exitCode, reliability.stdout, reliability.stderr)
+	}
+	tooStrict := runCLI(t, "reliability", "--endpoint", httpServer.URL, "--minimum", "95", "--json")
+	if tooStrict.exitCode != 1 || tooStrict.output.OK {
+		t.Fatalf("strict reliability exit=%d stdout=%s stderr=%s", tooStrict.exitCode, tooStrict.stdout, tooStrict.stderr)
+	}
+	invalidMinimum := runCLI(t, "reliability", "--minimum", "101")
+	if invalidMinimum.exitCode != 2 || !strings.Contains(invalidMinimum.stderr, `"code": "invalid_minimum"`) {
+		t.Fatalf("invalid reliability minimum exit=%d stdout=%s stderr=%s", invalidMinimum.exitCode, invalidMinimum.stdout, invalidMinimum.stderr)
+	}
 }
 
 func TestDoctorReportsOfflineWithoutPanicking(t *testing.T) {
@@ -148,12 +161,23 @@ func TestExecStartsIsolatedRuntimeAndPropagatesExitCode(t *testing.T) {
 	if success.exitCode != 0 {
 		t.Fatalf("exec exit=%d stdout=%s stderr=%s", success.exitCode, success.stdout, success.stderr)
 	}
+	startup := runCLI(t,
+		"exec", "--snapshot", "baseline", "--data-dir", sourceData, "--profile", "demo", "--integrity-mode", "startup", "--",
+		os.Args[0], "-test.run=TestExecHelperProcess", "--", "verify-startup",
+	)
+	if startup.exitCode != 0 {
+		t.Fatalf("exec startup exit=%d stdout=%s stderr=%s", startup.exitCode, startup.stdout, startup.stderr)
+	}
 	failed := runCLI(t,
 		"exec", "--",
 		os.Args[0], "-test.run=TestExecHelperProcess", "--", "exit7",
 	)
 	if failed.exitCode != 7 {
 		t.Fatalf("exec did not propagate exit code: %d stderr=%s", failed.exitCode, failed.stderr)
+	}
+	invalid := runCLI(t, "exec", "--integrity-mode", "invalid", "--", "true")
+	if invalid.exitCode != 2 || !strings.Contains(invalid.stderr, `"code": "invalid_integrity_mode"`) {
+		t.Fatalf("invalid integrity mode exit=%d stdout=%s stderr=%s", invalid.exitCode, invalid.stdout, invalid.stderr)
 	}
 }
 
@@ -177,6 +201,13 @@ func TestExecHelperProcess(t *testing.T) {
 	}
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "snapshot-bucket") {
 		t.Fatalf("snapshot unavailable status=%d body=%s", response.StatusCode, body)
+	}
+	wantIntegrityMode := state.IntegrityModeStrict
+	if mode == "verify-startup" {
+		wantIntegrityMode = state.IntegrityModeStartup
+	}
+	if integrityMode := os.Getenv("FCP_INTEGRITY_MODE"); integrityMode != string(wantIntegrityMode) {
+		t.Fatalf("fcp exec integrity mode=%q want=%q", integrityMode, wantIntegrityMode)
 	}
 	credentials := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	info, err := os.Stat(credentials)

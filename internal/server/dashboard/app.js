@@ -162,8 +162,13 @@ function summaryCard(index, label, value, caption, tone) {
   if (tone) card.dataset.tone = tone
   const heading = createElement("div", "summary-label")
   heading.append(createElement("span", "", label), createElement("span", "summary-index", `0${index}`))
-  card.append(heading, createElement("strong", "summary-value", compactNumber(value)), createElement("small", "summary-caption", caption))
+  const displayValue = typeof value === "number" ? compactNumber(value) : value
+  card.append(heading, createElement("strong", "summary-value", displayValue), createElement("small", "summary-caption", caption))
   return card
+}
+
+function providerReliability(provider) {
+  return state.data.reliability?.providers?.find((assessment) => assessment.provider === provider)
 }
 
 function renderSummary() {
@@ -175,11 +180,14 @@ function renderSummary() {
   const gcpResources = state.data.services
     .filter((service) => service.provider === "GCP")
     .reduce((sum, service) => sum + serviceResourceCount(service), 0)
+  const reliability = state.data.reliability
+  const awsReliability = providerReliability("AWS")
+  const gcpReliability = providerReliability("GCP")
   elements.summary.append(
-    summaryCard(1, "AWS 서비스", state.data.summary.awsServiceCount, `${awsResources}개 로컬 리소스`, "AWS"),
-    summaryCard(2, "GCP 서비스", state.data.summary.gcpServiceCount, `${gcpResources}개 로컬 리소스`, "GCP"),
-    summaryCard(3, "공식 SDK 검증", state.data.summary.sdkVerifiedCount, "실제 클라이언트 회귀 테스트", "SDK"),
-    summaryCard(4, "HTTP 계약 검증", state.data.summary.contractVerifiedCount, "명시된 HTTP 경로 테스트", "CONTRACT"),
+    summaryCard(1, "신뢰도", `${reliability.score}/100`, `${reliability.ratingLabel} · 권장 하한 ${reliability.recommendedMinimum}`, "RELIABILITY"),
+    summaryCard(2, "AWS 서비스", state.data.summary.awsServiceCount, `신뢰도 ${awsReliability?.score ?? "—"} · ${awsResources}개 리소스`, "AWS"),
+    summaryCard(3, "GCP 서비스", state.data.summary.gcpServiceCount, `신뢰도 ${gcpReliability?.score ?? "—"} · ${gcpResources}개 리소스`, "GCP"),
+    summaryCard(4, "검증 서비스", state.data.summary.serviceCount, `SDK ${state.data.summary.sdkVerifiedCount} · HTTP ${state.data.summary.contractVerifiedCount}`, "EVIDENCE"),
   )
 }
 
@@ -258,13 +266,53 @@ function serviceCard(service) {
 function renderVerification(service) {
   clear(elements.verification)
   if (!service) {
-    elements.verification.dataset.level = "OVERVIEW"
+    const assessment = state.data.reliability
+    const providerAssessment = state.activeProvider === "ALL" ? null : providerReliability(state.activeProvider)
+    const score = providerAssessment?.score ?? assessment.score
+    const ratingLabel = providerAssessment?.ratingLabel ?? assessment.ratingLabel
+    const scopeLabel = providerAssessment ? `${providerAssessment.provider} 범위` : "전체 범위"
+    const dimensions = assessment.dimensions.map((dimension) => {
+      if (!providerAssessment) return dimension
+      const withEarned = (earned) => ({
+        ...dimension,
+        earned,
+        status: earned === dimension.weight ? "FULL" : earned > 0 ? "PARTIAL" : "MISSING",
+      })
+      if (dimension.id === "api_fidelity") return withEarned(providerAssessment.apiFidelityScore)
+      if (dimension.id === "client_realism") return withEarned(providerAssessment.clientRealismScore)
+      return dimension
+    })
+    elements.verification.dataset.level = "RELIABILITY"
     const summary = createElement("div", "verification-summary")
     summary.append(
-      createElement("strong", "", "검증 기준"),
-      createElement("span", "", "READY는 실행 상태, 검증 배지는 실제 SDK 또는 HTTP 계약 회귀 테스트를 뜻합니다."),
+      createElement("strong", "", `${scopeLabel} 신뢰도 ${score}/100 · ${ratingLabel}`),
+      createElement("span", "", "로컬 개발·CI 범위의 버전 관리된 증거 점수입니다."),
     )
-    elements.verification.append(summary)
+    const details = createElement("details", "verification-details reliability-details")
+    details.open = state.openVerification.has("reliability")
+    details.addEventListener("toggle", () => {
+      if (details.open) state.openVerification.add("reliability")
+      else state.openVerification.delete("reliability")
+    })
+    details.append(createElement("summary", "", `점수 기준 ${dimensions.length}개 보기`))
+    const list = createElement("div", "verification-operation-list")
+    for (const dimension of dimensions) {
+      const row = createElement("div", "verification-operation")
+      const identity = createElement("div")
+      identity.append(createElement("strong", "", dimension.label), createElement("p", "", dimension.description))
+      const status = createElement("span", "verification-status", `${dimension.earned}/${dimension.weight}`)
+      status.dataset.status = dimension.status
+      row.append(identity, status)
+      list.append(row)
+    }
+    details.append(list)
+    const note = createElement("div", "verification-limitations")
+    note.append(
+      createElement("strong", "", "판정 범위"),
+      createElement("p", "", "최근 CI 성공 여부와 실제 AWS·GCP 전체 동등성은 이 점수에 포함되지 않습니다."),
+    )
+    details.append(note, createElement("small", "verification-source", `모델: ${assessment.modelVersion} · 기준: docs/reliability.md`))
+    elements.verification.append(summary, details)
     return
   }
   elements.verification.dataset.level = service.verification.level

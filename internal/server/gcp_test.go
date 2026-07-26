@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"cloud.google.com/go/firestore/apiv1/firestorepb"
 	iamcredentials "cloud.google.com/go/iam/credentials/apiv1"
 	"cloud.google.com/go/iam/credentials/apiv1/credentialspb"
 	kms "cloud.google.com/go/kms/apiv1"
@@ -204,6 +205,51 @@ func TestPubSubWithOfficialGoClient(t *testing.T) {
 	default:
 		t.Fatal("no message received")
 	}
+
+	topic, err := client.TopicAdminClient.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: topicName})
+	if err != nil || topic.GetName() != topicName {
+		t.Fatalf("unexpected topic: topic=%+v err=%v", topic, err)
+	}
+	topicIterator := client.TopicAdminClient.ListTopics(ctx, &pubsubpb.ListTopicsRequest{Project: "projects/test-project"})
+	listedTopic, err := topicIterator.Next()
+	if err != nil || listedTopic.GetName() != topicName {
+		t.Fatalf("unexpected topic list: topic=%+v err=%v", listedTopic, err)
+	}
+	if _, err := topicIterator.Next(); !errors.Is(err, iterator.Done) {
+		t.Fatalf("topic iterator should finish: %v", err)
+	}
+	subscription, err := client.SubscriptionAdminClient.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: subscriptionName})
+	if err != nil || subscription.GetTopic() != topicName {
+		t.Fatalf("unexpected subscription: subscription=%+v err=%v", subscription, err)
+	}
+	subscriptionIterator := client.SubscriptionAdminClient.ListSubscriptions(ctx, &pubsubpb.ListSubscriptionsRequest{Project: "projects/test-project"})
+	listedSubscription, err := subscriptionIterator.Next()
+	if err != nil || listedSubscription.GetName() != subscriptionName {
+		t.Fatalf("unexpected subscription list: subscription=%+v err=%v", listedSubscription, err)
+	}
+	if _, err := subscriptionIterator.Next(); !errors.Is(err, iterator.Done) {
+		t.Fatalf("subscription iterator should finish: %v", err)
+	}
+	topicSubscriptions := client.TopicAdminClient.ListTopicSubscriptions(ctx, &pubsubpb.ListTopicSubscriptionsRequest{Topic: topicName})
+	listedSubscriptionName, err := topicSubscriptions.Next()
+	if err != nil || listedSubscriptionName != subscriptionName {
+		t.Fatalf("unexpected topic subscription list: name=%q err=%v", listedSubscriptionName, err)
+	}
+	if _, err := topicSubscriptions.Next(); !errors.Is(err, iterator.Done) {
+		t.Fatalf("topic subscription iterator should finish: %v", err)
+	}
+	if err := client.SubscriptionAdminClient.DeleteSubscription(ctx, &pubsubpb.DeleteSubscriptionRequest{Subscription: subscriptionName}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SubscriptionAdminClient.GetSubscription(ctx, &pubsubpb.GetSubscriptionRequest{Subscription: subscriptionName}); status.Code(err) != codes.NotFound {
+		t.Fatalf("deleted subscription should be missing: %v", err)
+	}
+	if err := client.TopicAdminClient.DeleteTopic(ctx, &pubsubpb.DeleteTopicRequest{Topic: topicName}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.TopicAdminClient.GetTopic(ctx, &pubsubpb.GetTopicRequest{Topic: topicName}); status.Code(err) != codes.NotFound {
+		t.Fatalf("deleted topic should be missing: %v", err)
+	}
 }
 
 func TestPubSubDeadLetterPolicyWithOfficialGoClient(t *testing.T) {
@@ -363,6 +409,80 @@ func TestFirestoreWithOfficialGoClient(t *testing.T) {
 	}
 }
 
+func TestFirestoreGeneratedClientCRUDAndBatchWrite(t *testing.T) {
+	listener := newGCPTestServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	connection, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	client := firestorepb.NewFirestoreClient(connection)
+
+	database := "projects/test-project/databases/(default)"
+	parent := database + "/documents"
+	value := &firestorepb.Value{ValueType: &firestorepb.Value_StringValue{StringValue: "created"}}
+	created, err := client.CreateDocument(ctx, &firestorepb.CreateDocumentRequest{
+		Parent: parent, CollectionId: "direct", DocumentId: "one",
+		Document: &firestorepb.Document{Fields: map[string]*firestorepb.Value{"status": value}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.GetName() != parent+"/direct/one" {
+		t.Fatalf("unexpected document name: %s", created.GetName())
+	}
+	if _, err := client.CreateDocument(ctx, &firestorepb.CreateDocumentRequest{
+		Parent: parent, CollectionId: "direct", DocumentId: "one", Document: &firestorepb.Document{},
+	}); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("duplicate create should fail: %v", err)
+	}
+	got, err := client.GetDocument(ctx, &firestorepb.GetDocumentRequest{Name: created.GetName()})
+	if err != nil || got.GetFields()["status"].GetStringValue() != "created" {
+		t.Fatalf("unexpected get document: document=%+v err=%v", got, err)
+	}
+	listed, err := client.ListDocuments(ctx, &firestorepb.ListDocumentsRequest{
+		Parent: parent, CollectionId: "direct", PageSize: 1,
+	})
+	if err != nil || len(listed.GetDocuments()) != 1 || listed.GetDocuments()[0].GetName() != created.GetName() {
+		t.Fatalf("unexpected list documents: response=%+v err=%v", listed, err)
+	}
+	updatedValue := &firestorepb.Value{ValueType: &firestorepb.Value_StringValue{StringValue: "updated"}}
+	updated, err := client.UpdateDocument(ctx, &firestorepb.UpdateDocumentRequest{
+		Document:   &firestorepb.Document{Name: created.GetName(), Fields: map[string]*firestorepb.Value{"status": updatedValue}},
+		UpdateMask: &firestorepb.DocumentMask{FieldPaths: []string{"status"}},
+	})
+	if err != nil || updated.GetFields()["status"].GetStringValue() != "updated" {
+		t.Fatalf("unexpected update document: document=%+v err=%v", updated, err)
+	}
+	batchValue := &firestorepb.Value{ValueType: &firestorepb.Value_StringValue{StringValue: "batch"}}
+	batch, err := client.BatchWrite(ctx, &firestorepb.BatchWriteRequest{
+		Database: database,
+		Writes: []*firestorepb.Write{{
+			Operation: &firestorepb.Write_Update{Update: &firestorepb.Document{
+				Name: parent + "/direct/two", Fields: map[string]*firestorepb.Value{"status": batchValue},
+			}},
+		}},
+	})
+	if err != nil || len(batch.GetStatus()) != 1 || batch.GetStatus()[0].GetCode() != int32(codes.OK) {
+		t.Fatalf("unexpected batch write: response=%+v err=%v", batch, err)
+	}
+	transaction, err := client.BeginTransaction(ctx, &firestorepb.BeginTransactionRequest{Database: database})
+	if err != nil || len(transaction.GetTransaction()) == 0 {
+		t.Fatalf("unexpected transaction: response=%+v err=%v", transaction, err)
+	}
+	if _, err := client.Rollback(ctx, &firestorepb.RollbackRequest{Database: database, Transaction: transaction.GetTransaction()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DeleteDocument(ctx, &firestorepb.DeleteDocumentRequest{Name: created.GetName()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetDocument(ctx, &firestorepb.GetDocumentRequest{Name: created.GetName()}); status.Code(err) != codes.NotFound {
+		t.Fatalf("deleted document should be missing: %v", err)
+	}
+}
+
 func TestSecretManagerWithOfficialGoClient(t *testing.T) {
 	listener := newGCPTestServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -410,6 +530,47 @@ func TestSecretManagerWithOfficialGoClient(t *testing.T) {
 	if _, err := client.EnableSecretVersion(ctx, &secretmanagerpb.EnableSecretVersionRequest{Name: version.GetName()}); err != nil {
 		t.Fatal(err)
 	}
+	gotSecret, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: secret.GetName()})
+	if err != nil || gotSecret.GetName() != secret.GetName() {
+		t.Fatalf("unexpected secret: secret=%+v err=%v", gotSecret, err)
+	}
+	secretIterator := client.ListSecrets(ctx, &secretmanagerpb.ListSecretsRequest{Parent: parent, PageSize: 1})
+	listedSecret, err := secretIterator.Next()
+	if err != nil || listedSecret.GetName() != secret.GetName() {
+		t.Fatalf("unexpected secret list: secret=%+v err=%v", listedSecret, err)
+	}
+	if _, err := secretIterator.Next(); !errors.Is(err, iterator.Done) {
+		t.Fatalf("secret iterator should finish: %v", err)
+	}
+	updatedSecret, err := client.UpdateSecret(ctx, &secretmanagerpb.UpdateSecretRequest{
+		Secret:     &secretmanagerpb.Secret{Name: secret.GetName(), Labels: map[string]string{"env": "test"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+	})
+	if err != nil || updatedSecret.GetLabels()["env"] != "test" {
+		t.Fatalf("secret labels were not updated: secret=%+v err=%v", updatedSecret, err)
+	}
+	gotVersion, err := client.GetSecretVersion(ctx, &secretmanagerpb.GetSecretVersionRequest{Name: version.GetName()})
+	if err != nil || gotVersion.GetState() != secretmanagerpb.SecretVersion_ENABLED {
+		t.Fatalf("unexpected secret version: version=%+v err=%v", gotVersion, err)
+	}
+	versionIterator := client.ListSecretVersions(ctx, &secretmanagerpb.ListSecretVersionsRequest{Parent: secret.GetName(), PageSize: 1})
+	listedVersion, err := versionIterator.Next()
+	if err != nil || listedVersion.GetName() != version.GetName() {
+		t.Fatalf("unexpected secret version list: version=%+v err=%v", listedVersion, err)
+	}
+	if _, err := versionIterator.Next(); !errors.Is(err, iterator.Done) {
+		t.Fatalf("secret version iterator should finish: %v", err)
+	}
+	destroyed, err := client.DestroySecretVersion(ctx, &secretmanagerpb.DestroySecretVersionRequest{Name: version.GetName()})
+	if err != nil || destroyed.GetState() != secretmanagerpb.SecretVersion_DESTROYED {
+		t.Fatalf("unexpected destroyed secret version: version=%+v err=%v", destroyed, err)
+	}
+	if err := client.DeleteSecret(ctx, &secretmanagerpb.DeleteSecretRequest{Name: secret.GetName()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: secret.GetName()}); status.Code(err) != codes.NotFound {
+		t.Fatalf("deleted secret should be missing: %v", err)
+	}
 }
 
 func TestKMSWithOfficialGoClient(t *testing.T) {
@@ -448,6 +609,50 @@ func TestKMSWithOfficialGoClient(t *testing.T) {
 	}
 	if string(decrypted.GetPlaintext()) != "local-dek" || decrypted.GetPlaintextCrc32C() == nil {
 		t.Fatalf("unexpected decrypt response: %+v", decrypted)
+	}
+	gotKeyRing, err := client.GetKeyRing(ctx, &kmspb.GetKeyRingRequest{Name: keyRing.GetName()})
+	if err != nil || gotKeyRing.GetName() != keyRing.GetName() {
+		t.Fatalf("unexpected key ring: keyRing=%+v err=%v", gotKeyRing, err)
+	}
+	keyRingIterator := client.ListKeyRings(ctx, &kmspb.ListKeyRingsRequest{Parent: location})
+	listedKeyRing, err := keyRingIterator.Next()
+	if err != nil || listedKeyRing.GetName() != keyRing.GetName() {
+		t.Fatalf("unexpected key ring list: keyRing=%+v err=%v", listedKeyRing, err)
+	}
+	if _, err := keyRingIterator.Next(); !errors.Is(err, iterator.Done) {
+		t.Fatalf("key ring iterator should finish: %v", err)
+	}
+	gotSymmetric, err := client.GetCryptoKey(ctx, &kmspb.GetCryptoKeyRequest{Name: symmetric.GetName()})
+	if err != nil || gotSymmetric.GetName() != symmetric.GetName() {
+		t.Fatalf("unexpected crypto key: key=%+v err=%v", gotSymmetric, err)
+	}
+	keyIterator := client.ListCryptoKeys(ctx, &kmspb.ListCryptoKeysRequest{Parent: keyRing.GetName()})
+	listedKey, err := keyIterator.Next()
+	if err != nil || listedKey.GetName() != symmetric.GetName() {
+		t.Fatalf("unexpected crypto key list: key=%+v err=%v", listedKey, err)
+	}
+	addedVersion, err := client.CreateCryptoKeyVersion(ctx, &kmspb.CreateCryptoKeyVersionRequest{
+		Parent: symmetric.GetName(), CryptoKeyVersion: &kmspb.CryptoKeyVersion{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotVersion, err := client.GetCryptoKeyVersion(ctx, &kmspb.GetCryptoKeyVersionRequest{Name: addedVersion.GetName()})
+	if err != nil || gotVersion.GetName() != addedVersion.GetName() {
+		t.Fatalf("unexpected crypto key version: version=%+v err=%v", gotVersion, err)
+	}
+	versionIterator := client.ListCryptoKeyVersions(ctx, &kmspb.ListCryptoKeyVersionsRequest{Parent: symmetric.GetName()})
+	versionCount := 0
+	for {
+		if _, err := versionIterator.Next(); errors.Is(err, iterator.Done) {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		versionCount++
+	}
+	if versionCount != 2 {
+		t.Fatalf("unexpected crypto key version count: %d", versionCount)
 	}
 
 	signing, err := client.CreateCryptoKey(ctx, &kmspb.CreateCryptoKeyRequest{
@@ -508,6 +713,14 @@ func TestIAMCredentialsWithOfficialGoClient(t *testing.T) {
 	}
 	if strings.Count(token.GetAccessToken(), ".") != 2 || token.GetExpireTime() == nil {
 		t.Fatalf("unexpected access token response: %+v", token)
+	}
+	idToken, err := client.GenerateIdToken(ctx, &credentialspb.GenerateIdTokenRequest{Name: name, Audience: "https://fcp.local", IncludeEmail: true})
+	if err != nil || strings.Count(idToken.GetToken(), ".") != 2 {
+		t.Fatalf("unexpected ID token: token=%+v err=%v", idToken, err)
+	}
+	signedJWT, err := client.SignJwt(ctx, &credentialspb.SignJwtRequest{Name: name, Payload: `{"sub":"fcp-test"}`})
+	if err != nil || signedJWT.GetKeyId() == "" || strings.Count(signedJWT.GetSignedJwt(), ".") != 2 {
+		t.Fatalf("unexpected signed JWT: response=%+v err=%v", signedJWT, err)
 	}
 }
 
@@ -703,6 +916,6 @@ func newGCPTestServer(t *testing.T) net.Listener {
 	}
 	grpcServer := NewGCPGRPCServer(store)
 	go func() { _ = grpcServer.Serve(listener) }()
-	t.Cleanup(func() { grpcServer.Stop(); _ = listener.Close() })
+	t.Cleanup(func() { grpcServer.Stop(); _ = listener.Close(); _ = store.Close() })
 	return listener
 }

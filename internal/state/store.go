@@ -21,6 +21,8 @@ import (
 const defaultAccountID = "000000000000"
 
 var (
+	ErrDataDirLocked           = errors.New("data directory is already in use")
+	ErrStateCorrupt            = errors.New("state is corrupt")
 	ErrBucketNotFound          = errors.New("bucket not found")
 	ErrBucketNotEmpty          = errors.New("bucket not empty")
 	ErrObjectNotFound          = errors.New("object not found")
@@ -38,6 +40,7 @@ var (
 type Object struct {
 	Key          string            `json:"key"`
 	ETag         string            `json:"etag"`
+	SHA256       string            `json:"sha256,omitempty"`
 	Size         int64             `json:"size"`
 	LastModified time.Time         `json:"lastModified"`
 	ContentType  string            `json:"contentType,omitempty"`
@@ -63,6 +66,7 @@ type Bucket struct {
 type MultipartPart struct {
 	PartNumber   int       `json:"partNumber"`
 	ETag         string    `json:"etag"`
+	SHA256       string    `json:"sha256,omitempty"`
 	Size         int64     `json:"size"`
 	LastModified time.Time `json:"lastModified"`
 	File         string    `json:"file"`
@@ -152,38 +156,114 @@ type snapshot struct {
 }
 
 type Store struct {
-	mu      sync.Mutex
-	dir     string
-	objects string
-	data    snapshot
-	now     func() time.Time
+	mu            sync.Mutex
+	dir           string
+	objects       string
+	lock          *os.File
+	data          snapshot
+	committedRaw  []byte
+	integrityMode IntegrityMode
+	now           func() time.Time
 }
 
 func Open(dir string) (*Store, error) {
+	return OpenWithOptions(dir, OpenOptions{})
+}
+
+func OpenWithOptions(dir string, options OpenOptions) (*Store, error) {
 	if dir == "" {
 		return nil, errors.New("data directory is required")
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "objects"), 0o755); err != nil {
-		return nil, err
-	}
-	s := &Store{
-		dir:     dir,
-		objects: filepath.Join(dir, "objects"),
-		data:    emptySnapshot(),
-		now:     time.Now,
-	}
-	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
-	}
+	integrityMode, err := ParseIntegrityMode(string(options.IntegrityMode))
 	if err != nil {
 		return nil, err
 	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	lock, err := acquireDataDirLock(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := recoverSnapshotRestore(dir); err != nil {
+		_ = releaseDataDirLock(lock)
+		return nil, err
+	}
+	objectsDir := filepath.Join(dir, "objects")
+	if err := os.MkdirAll(objectsDir, 0o755); err != nil {
+		_ = releaseDataDirLock(lock)
+		return nil, err
+	}
+	if err := requireRegularDirectory(objectsDir, "object directory"); err != nil {
+		_ = releaseDataDirLock(lock)
+		return nil, err
+	}
+	s := &Store{
+		dir:           dir,
+		objects:       objectsDir,
+		lock:          lock,
+		data:          emptySnapshot(),
+		integrityMode: integrityMode,
+		now:           time.Now,
+	}
+	raw, err := readPersistentStateFile(filepath.Join(dir, "state.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		if _, err := validateAndCleanupObjectState(s.objects, s.data); err != nil {
+			_ = s.Close()
+			return nil, err
+		}
+		if err := s.initializeCommittedState(); err != nil {
+			_ = s.Close()
+			return nil, err
+		}
+		return s, nil
+	}
+	if err != nil {
+		_ = s.Close()
+		return nil, err
+	}
 	if err := json.Unmarshal(raw, &s.data); err != nil {
-		return nil, fmt.Errorf("decode state: %w", err)
+		_ = s.Close()
+		return nil, fmt.Errorf("%w: decode state: %v", ErrStateCorrupt, err)
+	}
+	if err := validateSnapshotStructure(s.data); err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
 	}
 	normalizeSnapshot(&s.data)
+	if err := s.initializeCommittedState(); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	upgraded, err := validateAndCleanupObjectState(s.objects, s.data)
+	if err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	if upgraded {
+		if err := s.saveLocked(); err != nil {
+			_ = s.Close()
+			return nil, fmt.Errorf("persist object integrity metadata: %w", err)
+		}
+	}
 	return s, nil
+}
+
+func (s *Store) IntegrityMode() IntegrityMode {
+	return s.integrityMode
+}
+
+// Close releases the writer lock for this data directory. It is safe to call
+// Close more than once.
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lock == nil {
+		return nil
+	}
+	lock := s.lock
+	s.lock = nil
+	return releaseDataDirLock(lock)
 }
 
 func emptySnapshot() snapshot {
@@ -209,6 +289,16 @@ func normalizeSnapshot(data *snapshot) {
 	if data.DynamoTables == nil {
 		data.DynamoTables = map[string]*DynamoTable{}
 	}
+	for _, bucket := range data.Buckets {
+		if bucket.Objects == nil {
+			bucket.Objects = map[string]Object{}
+		}
+	}
+	for _, upload := range data.MultipartUploads {
+		if upload.Parts == nil {
+			upload.Parts = map[int]MultipartPart{}
+		}
+	}
 	for _, table := range data.DynamoTables {
 		if table.Items == nil {
 			table.Items = map[string]DynamoItem{}
@@ -224,6 +314,11 @@ func normalizeSnapshot(data *snapshot) {
 	}
 	if data.GCSBuckets == nil {
 		data.GCSBuckets = map[string]*GCSBucket{}
+	}
+	for _, bucket := range data.GCSBuckets {
+		if bucket.Objects == nil {
+			bucket.Objects = map[string]GCSObject{}
+		}
 	}
 	if data.PubSubTopics == nil {
 		data.PubSubTopics = map[string]*PubSubTopic{}
@@ -255,40 +350,54 @@ func normalizeSnapshot(data *snapshot) {
 }
 
 func (s *Store) saveLocked() error {
-	raw, err := json.MarshalIndent(s.data, "", "  ")
+	raw, err := encodeSnapshot(s.data)
 	if err != nil {
-		return err
+		return s.rollbackSaveLocked(err)
 	}
 	tmp, err := os.CreateTemp(s.dir, ".state-*.json")
 	if err != nil {
-		return err
+		return s.rollbackSaveLocked(err)
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if err := tmp.Chmod(0o600); err != nil {
 		tmp.Close()
-		return err
+		return s.rollbackSaveLocked(err)
 	}
 	if _, err := tmp.Write(raw); err != nil {
 		tmp.Close()
-		return err
+		return s.rollbackSaveLocked(err)
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return err
+		return s.rollbackSaveLocked(err)
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return s.rollbackSaveLocked(err)
 	}
-	return os.Rename(tmpName, filepath.Join(s.dir, "state.json"))
+	if err := syncDirectory(s.dir); err != nil {
+		return s.rollbackSaveLocked(err)
+	}
+	if err := os.Rename(tmpName, filepath.Join(s.dir, "state.json")); err != nil {
+		return s.rollbackSaveLocked(err)
+	}
+	s.committedRaw = append(s.committedRaw[:0], raw...)
+	// The rename is the commit point. A directory sync makes it durable on
+	// filesystems that support it; after the commit point an operation must not
+	// be reported as failed because callers could safely retry it.
+	_ = syncDirectory(s.dir)
+	return nil
 }
 
 func (s *Store) Reset() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data = emptySnapshot()
 	entries, err := os.ReadDir(s.objects)
 	if err != nil {
+		return err
+	}
+	s.data = emptySnapshot()
+	if err := s.saveLocked(); err != nil {
 		return err
 	}
 	for _, entry := range entries {
@@ -296,7 +405,8 @@ func (s *Store) Reset() error {
 			_ = os.Remove(filepath.Join(s.objects, entry.Name()))
 		}
 	}
-	return s.saveLocked()
+	_ = syncDirectory(s.objects)
+	return nil
 }
 
 // ResetWorkloadData clears data produced by local tests while preserving
@@ -352,7 +462,6 @@ func (s *Store) ResetWorkloadData() error {
 		subscriptions[name] = &cloned
 	}
 
-	previous := s.data
 	s.data = snapshot{
 		Buckets: buckets, MultipartUploads: map[string]*MultipartUpload{}, Queues: queues, DynamoTables: dynamoTables, GCSBuckets: gcsBuckets,
 		PubSubTopics: s.data.PubSubTopics, PubSubSubscriptions: subscriptions,
@@ -362,7 +471,6 @@ func (s *Store) ResetWorkloadData() error {
 		FCMMessages:        []FCMMessage{}, VertexGenerations: []VertexGeneration{},
 	}
 	if err := s.saveLocked(); err != nil {
-		s.data = previous
 		return err
 	}
 	for _, file := range files {
@@ -425,8 +533,9 @@ func (s *Store) PutObject(bucket, key string, body []byte, contentType string, m
 	if !ok {
 		return Object{}, ErrBucketNotFound
 	}
-	hash := sha256.Sum256([]byte(bucket + "\x00" + key))
-	file := hex.EncodeToString(hash[:])
+	previous, replaced := b.Objects[key]
+	contentHash := sha256.Sum256(body)
+	file := generationObjectFile("s3", bucket, key, contentHash)
 	tmp, err := os.CreateTemp(s.objects, ".object-*")
 	if err != nil {
 		return Object{}, err
@@ -447,14 +556,31 @@ func (s *Store) PutObject(bucket, key string, body []byte, contentType string, m
 	if err := os.Rename(tmpName, filepath.Join(s.objects, file)); err != nil {
 		return Object{}, err
 	}
+	if err := syncDirectory(s.objects); err != nil {
+		if !replaced || previous.File != file {
+			_ = os.Remove(filepath.Join(s.objects, file))
+		}
+		return Object{}, err
+	}
 	sum := md5.Sum(body)
-	obj := Object{Key: key, ETag: hex.EncodeToString(sum[:]), Size: int64(len(body)), LastModified: s.now().UTC(), ContentType: contentType, Metadata: metadata, File: file}
+	obj := Object{Key: key, ETag: hex.EncodeToString(sum[:]), SHA256: hex.EncodeToString(contentHash[:]), Size: int64(len(body)), LastModified: s.now().UTC(), ContentType: contentType, Metadata: cloneStringMap(metadata), File: file}
 	b.Objects[key] = obj
 	if err := s.enqueueObjectEventLocked(b, obj, "ObjectCreated:Put"); err != nil {
+		_ = s.rollbackSaveLocked(err)
+		if !replaced || previous.File != file {
+			_ = os.Remove(filepath.Join(s.objects, file))
+		}
 		return Object{}, err
 	}
 	if err := s.saveLocked(); err != nil {
+		if !replaced || previous.File != file {
+			_ = os.Remove(filepath.Join(s.objects, file))
+		}
 		return Object{}, err
+	}
+	if replaced && previous.File != file {
+		_ = os.Remove(filepath.Join(s.objects, previous.File))
+		_ = syncDirectory(s.objects)
 	}
 	return obj, nil
 }
@@ -505,7 +631,7 @@ func (s *Store) GetObject(bucket, key string) (Object, []byte, error) {
 	if !ok {
 		return Object{}, nil, ErrObjectNotFound
 	}
-	body, err := os.ReadFile(filepath.Join(s.objects, obj.File))
+	body, err := s.readObjectBody(obj.File, obj.Size, obj.SHA256)
 	return obj, body, err
 }
 
@@ -522,7 +648,6 @@ func (s *Store) DeleteObject(bucket, key string) error {
 	}
 	delete(b.Objects, key)
 	if err := s.saveLocked(); err != nil {
-		b.Objects[key] = obj
 		return err
 	}
 	_ = os.Remove(filepath.Join(s.objects, obj.File))
@@ -571,7 +696,6 @@ func (s *Store) CreateMultipartUpload(bucket, key, contentType string, metadata 
 	}
 	s.data.MultipartUploads[upload.ID] = upload
 	if err := s.saveLocked(); err != nil {
-		delete(s.data.MultipartUploads, upload.ID)
 		return MultipartUpload{}, err
 	}
 	return *cloneMultipartUpload(upload), nil
@@ -587,8 +711,9 @@ func (s *Store) UploadMultipartPart(bucket, key, uploadID string, partNumber int
 	if !ok || upload.Bucket != bucket || upload.Key != key {
 		return MultipartPart{}, ErrMultipartUploadNotFound
 	}
-	hash := sha256.Sum256([]byte("multipart\x00" + uploadID + "\x00" + strconv.Itoa(partNumber)))
-	file := hex.EncodeToString(hash[:])
+	previous, replaced := upload.Parts[partNumber]
+	contentHash := sha256.Sum256(body)
+	file := generationObjectFile("multipart", uploadID, strconv.Itoa(partNumber), contentHash)
 	tmp, err := os.CreateTemp(s.objects, ".multipart-*")
 	if err != nil {
 		return MultipartPart{}, err
@@ -609,20 +734,27 @@ func (s *Store) UploadMultipartPart(bucket, key, uploadID string, partNumber int
 	if err := os.Rename(tmpName, filepath.Join(s.objects, file)); err != nil {
 		return MultipartPart{}, err
 	}
-	sum := md5.Sum(body)
-	part := MultipartPart{
-		PartNumber: partNumber, ETag: hex.EncodeToString(sum[:]), Size: int64(len(body)),
-		LastModified: s.now().UTC(), File: file,
-	}
-	previous, replaced := upload.Parts[partNumber]
-	upload.Parts[partNumber] = part
-	if err := s.saveLocked(); err != nil {
-		if replaced {
-			upload.Parts[partNumber] = previous
-		} else {
-			delete(upload.Parts, partNumber)
+	if err := syncDirectory(s.objects); err != nil {
+		if !replaced || previous.File != file {
+			_ = os.Remove(filepath.Join(s.objects, file))
 		}
 		return MultipartPart{}, err
+	}
+	sum := md5.Sum(body)
+	part := MultipartPart{
+		PartNumber: partNumber, ETag: hex.EncodeToString(sum[:]), SHA256: hex.EncodeToString(contentHash[:]), Size: int64(len(body)),
+		LastModified: s.now().UTC(), File: file,
+	}
+	upload.Parts[partNumber] = part
+	if err := s.saveLocked(); err != nil {
+		if !replaced || previous.File != file {
+			_ = os.Remove(filepath.Join(s.objects, file))
+		}
+		return MultipartPart{}, err
+	}
+	if replaced && previous.File != file {
+		_ = os.Remove(filepath.Join(s.objects, previous.File))
+		_ = syncDirectory(s.objects)
 	}
 	return part, nil
 }
@@ -673,6 +805,8 @@ func (s *Store) CompleteMultipartUpload(bucket, key, uploadID string, completed 
 	if len(completed) == 0 {
 		return Object{}, ErrInvalidPart
 	}
+	b := s.data.Buckets[bucket]
+	previousObject, replaced := b.Objects[key]
 	parts := make([]MultipartPart, 0, len(completed))
 	previousNumber := 0
 	for i, requested := range completed {
@@ -697,14 +831,20 @@ func (s *Store) CompleteMultipartUpload(bucket, key, uploadID string, completed 
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	combinedMD5 := md5.New()
+	contentSHA256 := sha256.New()
 	var totalSize int64
 	for _, part := range parts {
-		partFile, err := os.Open(filepath.Join(s.objects, part.File))
+		partFile, err := s.openObjectFileForRead(part.File, part.Size)
 		if err != nil {
 			tmp.Close()
 			return Object{}, err
 		}
-		written, copyErr := io.Copy(tmp, partFile)
+		partSHA256 := sha256.New()
+		writer := io.MultiWriter(tmp, contentSHA256)
+		if s.integrityMode == IntegrityModeStrict {
+			writer = io.MultiWriter(tmp, contentSHA256, partSHA256)
+		}
+		written, copyErr := io.Copy(writer, partFile)
 		closeErr := partFile.Close()
 		if copyErr != nil {
 			tmp.Close()
@@ -717,6 +857,12 @@ func (s *Store) CompleteMultipartUpload(bucket, key, uploadID string, completed 
 		if written != part.Size {
 			tmp.Close()
 			return Object{}, fmt.Errorf("multipart part %d size changed", part.PartNumber)
+		}
+		if s.integrityMode == IntegrityModeStrict {
+			if err := requireMatchingSHA256(part.File, part.SHA256, hex.EncodeToString(partSHA256.Sum(nil))); err != nil {
+				tmp.Close()
+				return Object{}, err
+			}
 		}
 		digest, err := hex.DecodeString(part.ETag)
 		if err != nil {
@@ -733,35 +879,45 @@ func (s *Store) CompleteMultipartUpload(bucket, key, uploadID string, completed 
 	if err := tmp.Close(); err != nil {
 		return Object{}, err
 	}
-	objectHash := sha256.Sum256([]byte(bucket + "\x00" + key))
-	objectFile := hex.EncodeToString(objectHash[:])
+	var contentDigest [sha256.Size]byte
+	copy(contentDigest[:], contentSHA256.Sum(nil))
+	objectFile := generationObjectFile("s3", bucket, key, contentDigest)
 	if err := os.Rename(tmpName, filepath.Join(s.objects, objectFile)); err != nil {
 		return Object{}, err
 	}
+	if err := syncDirectory(s.objects); err != nil {
+		if !replaced || previousObject.File != objectFile {
+			_ = os.Remove(filepath.Join(s.objects, objectFile))
+		}
+		return Object{}, err
+	}
 
-	b := s.data.Buckets[bucket]
 	obj := Object{
-		Key: key, ETag: fmt.Sprintf("%x-%d", combinedMD5.Sum(nil), len(parts)), Size: totalSize,
+		Key: key, ETag: fmt.Sprintf("%x-%d", combinedMD5.Sum(nil), len(parts)), SHA256: hex.EncodeToString(contentDigest[:]), Size: totalSize,
 		LastModified: s.now().UTC(), ContentType: upload.ContentType, Metadata: cloneStringMap(upload.Metadata), File: objectFile,
 	}
-	previousObject, replaced := b.Objects[key]
 	b.Objects[key] = obj
 	delete(s.data.MultipartUploads, uploadID)
 	if err := s.enqueueObjectEventLocked(b, obj, "ObjectCreated:CompleteMultipartUpload"); err != nil {
+		_ = s.rollbackSaveLocked(err)
+		if !replaced || previousObject.File != objectFile {
+			_ = os.Remove(filepath.Join(s.objects, objectFile))
+		}
 		return Object{}, err
 	}
 	if err := s.saveLocked(); err != nil {
-		s.data.MultipartUploads[uploadID] = upload
-		if replaced {
-			b.Objects[key] = previousObject
-		} else {
-			delete(b.Objects, key)
+		if !replaced || previousObject.File != objectFile {
+			_ = os.Remove(filepath.Join(s.objects, objectFile))
 		}
 		return Object{}, err
 	}
 	for _, part := range upload.Parts {
 		_ = os.Remove(filepath.Join(s.objects, part.File))
 	}
+	if replaced && previousObject.File != objectFile {
+		_ = os.Remove(filepath.Join(s.objects, previousObject.File))
+	}
+	_ = syncDirectory(s.objects)
 	return obj, nil
 }
 
@@ -774,7 +930,6 @@ func (s *Store) AbortMultipartUpload(bucket, key, uploadID string) error {
 	}
 	delete(s.data.MultipartUploads, uploadID)
 	if err := s.saveLocked(); err != nil {
-		s.data.MultipartUploads[uploadID] = upload
 		return err
 	}
 	for _, part := range upload.Parts {

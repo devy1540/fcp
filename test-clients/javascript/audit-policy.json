@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "fcp.pnpm-audit-policy/v1",
+  "exceptions": [
+    {
+      "advisoryUrl": "https://github.com/advisories/GHSA-8988-4f7v-96qf",
+      "package": "@opentelemetry/core",
+      "severity": "moderate",
+      "vulnerableVersions": "<2.8.0",
+      "patchedVersions": ">=2.8.0",
+      "findings": [
+        {
+          "version": "1.30.1",
+          "path": ".>@google-cloud/pubsub>@opentelemetry/core"
+        }
+      ],
+      "expiresOn": "2026-08-24",
+      "scope": "JavaScript official Pub/Sub SDK compatibility tests only; this dependency is not copied into FCP release binaries or images.",
+      "reason": "@google-cloud/pubsub 5.3.1 requires the OpenTelemetry 1.x line, while the advisory fix is only available in the incompatible 2.x line."
+    }
+  ]
+}

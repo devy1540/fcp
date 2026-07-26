@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -10,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/devy1540/fcp/internal/state"
 )
 
 func TestStartServesHTTPAndGCPOnDynamicPorts(t *testing.T) {
@@ -61,5 +64,61 @@ func TestStartRejectsUnknownProfile(t *testing.T) {
 	_, err := Start(Config{DataDir: t.TempDir(), Profile: "unknown", Logger: log.New(io.Discard, "", 0)})
 	if err == nil {
 		t.Fatal("expected unknown profile error")
+	}
+}
+
+func TestStartRejectsInvalidIntegrityMode(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "data")
+	_, err := Start(Config{
+		DataDir:       dataDir,
+		IntegrityMode: "invalid",
+		Logger:        log.New(io.Discard, "", 0),
+	})
+	if err == nil {
+		t.Fatal("expected invalid integrity mode error")
+	}
+	if _, statErr := os.Stat(dataDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("invalid integrity mode created data directory: %v", statErr)
+	}
+}
+
+func TestStartRejectsConcurrentRuntimeForDataDir(t *testing.T) {
+	dataDir := t.TempDir()
+	first, err := Start(Config{
+		Listen:    "127.0.0.1:0",
+		GCPListen: "127.0.0.1:0",
+		DataDir:   dataDir,
+		Logger:    log.New(io.Discard, "", 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Start(Config{
+		Listen:    "127.0.0.1:0",
+		GCPListen: "127.0.0.1:0",
+		DataDir:   dataDir,
+		Logger:    log.New(io.Discard, "", 0),
+	}); !errors.Is(err, state.ErrDataDirLocked) {
+		t.Fatalf("second runtime error=%v want=%v", err, state.ErrDataDirLocked)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := first.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Start(Config{
+		Listen:    "127.0.0.1:0",
+		GCPListen: "127.0.0.1:0",
+		DataDir:   dataDir,
+		Logger:    log.New(io.Discard, "", 0),
+	})
+	if err != nil {
+		t.Fatalf("data directory lock was not released: %v", err)
+	}
+	if err := reopened.Close(ctx); err != nil {
+		t.Fatal(err)
 	}
 }

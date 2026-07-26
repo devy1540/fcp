@@ -32,7 +32,6 @@ func (s *Store) RecordFCMMessage(project string, message json.RawMessage, valida
 	}
 	s.data.FCMMessages = append(s.data.FCMMessages, recorded)
 	if err := s.saveLocked(); err != nil {
-		s.data.FCMMessages = s.data.FCMMessages[:len(s.data.FCMMessages)-1]
 		return FCMMessage{}, err
 	}
 	return cloneFCMMessage(recorded), nil
@@ -54,11 +53,6 @@ func (s *Store) ListFCMMessages(project string) []FCMMessage {
 func (s *Store) ClearFCMMessages() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	previous := s.data.FCMMessages
 	s.data.FCMMessages = []FCMMessage{}
-	if err := s.saveLocked(); err != nil {
-		s.data.FCMMessages = previous
-		return err
-	}
-	return nil
+	return s.saveLocked()
 }

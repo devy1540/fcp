@@ -120,6 +120,12 @@ func TestDashboardListsResourcesWithoutSensitiveValues(t *testing.T) {
 	if dashboard.Summary.AWSServiceCount != 4 || dashboard.Summary.GCPServiceCount != 9 || dashboard.Summary.SDKVerifiedCount != 11 || dashboard.Summary.ContractVerifiedCount != 2 {
 		t.Fatalf("unexpected provider or verification summary: %+v", dashboard.Summary)
 	}
+	if dashboard.Reliability.Score != 92 || dashboard.Reliability.Rating != "HIGH" || !dashboard.Reliability.Passed || len(dashboard.Reliability.Dimensions) != 6 {
+		t.Fatalf("unexpected reliability assessment: %+v", dashboard.Reliability)
+	}
+	if len(dashboard.Reliability.Providers) != 2 || dashboard.Reliability.Providers[0].Provider != "AWS" || dashboard.Reliability.Providers[0].Score != 88 || dashboard.Reliability.Providers[1].Provider != "GCP" || dashboard.Reliability.Providers[1].Score != 94 {
+		t.Fatalf("unexpected provider reliability: %+v", dashboard.Reliability.Providers)
+	}
 	for _, service := range dashboard.Services {
 		if service.Provider != "AWS" && service.Provider != "GCP" {
 			t.Fatalf("service %s has unknown provider %q", service.ID, service.Provider)
@@ -208,6 +214,19 @@ func TestDashboardSummaryAndServicePagination(t *testing.T) {
 			t.Fatalf("summary service %s unexpectedly contains verification details", service.ID)
 		}
 	}
+	for _, dimension := range summary.Reliability.Dimensions {
+		if len(dimension.Criteria) != 0 {
+			t.Fatalf("summary reliability dimension %s unexpectedly contains criteria", dimension.ID)
+		}
+	}
+	if len(summary.Reliability.Limitations) != 0 {
+		t.Fatalf("summary unexpectedly contains reliability limitations: %+v", summary.Reliability.Limitations)
+	}
+
+	reliabilityView := getDashboard(t, server.URL+"/_fcp/dashboard?view=reliability")
+	if len(reliabilityView.Services) != 0 || reliabilityView.Reliability.Score != 92 || len(reliabilityView.Reliability.Dimensions[0].Criteria) == 0 {
+		t.Fatalf("unexpected reliability view: %+v", reliabilityView)
+	}
 
 	first := getDashboard(t, server.URL+"/_fcp/dashboard?view=service&service=gcs&limit=10")
 	firstGCS := findDashboardService(t, first.Services, "gcs")
@@ -292,7 +311,7 @@ func TestDashboardUIAssetsAreEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, accessibleName := range []string{`aria-label="새로고침"`, `aria-label="테스트 데이터 비우기"`, `aria-label="리소스 검색"`, `aria-label="클라우드 제공자 필터"`, `id="verification-note"`, `aria-labelledby="confirm-title"`, `aria-labelledby="create-title"`, `role="alert"`} {
+	for _, accessibleName := range []string{`aria-label="새로고침"`, `aria-label="테스트 데이터 비우기"`, `aria-label="리소스 검색"`, `aria-label="클라우드 제공자 필터"`, `id="verification-note"`, `aria-labelledby="confirm-title"`, `aria-labelledby="create-title"`, `role="alert"`, `신뢰도는 로컬 개발·CI 증거 점수입니다.`} {
 		if !strings.Contains(string(index), accessibleName) {
 			t.Fatalf("dashboard is missing %s", accessibleName)
 		}

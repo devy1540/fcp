@@ -16,6 +16,11 @@ import (
 
 const snapshotSchemaVersion = "fcp.snapshot/v1"
 
+const (
+	snapshotRestoreJournalFile    = ".snapshot-restore.json"
+	snapshotRestoreJournalVersion = "fcp.snapshot-restore/v1"
+)
+
 var (
 	ErrSnapshotInvalidName = errors.New("snapshot name is invalid")
 	ErrSnapshotExists      = errors.New("snapshot already exists")
@@ -60,6 +65,13 @@ type loadedSnapshot struct {
 	dir      string
 }
 
+type snapshotRestoreJournal struct {
+	SchemaVersion     string `json:"schemaVersion"`
+	BackupDirectory   string `json:"backupDirectory"`
+	StageDirectory    string `json:"stageDirectory"`
+	TargetStateSHA256 string `json:"targetStateSha256"`
+}
+
 // SaveSnapshot creates an immutable, checksummed copy of the current state.
 // A snapshot is never overwritten implicitly.
 func (s *Store) SaveSnapshot(name string) (SnapshotInfo, error) {
@@ -68,6 +80,17 @@ func (s *Store) SaveSnapshot(name string) (SnapshotInfo, error) {
 
 	if !validSnapshotName(name) {
 		return SnapshotInfo{}, ErrSnapshotInvalidName
+	}
+	if s.integrityMode == IntegrityModeStrict {
+		upgraded, err := validateAndCleanupObjectState(s.objects, s.data)
+		if err != nil {
+			return SnapshotInfo{}, err
+		}
+		if upgraded {
+			if err := s.saveLocked(); err != nil {
+				return SnapshotInfo{}, fmt.Errorf("persist object integrity metadata: %w", err)
+			}
+		}
 	}
 	root, err := ensureSnapshotRoot(s.dir)
 	if err != nil {
@@ -135,12 +158,19 @@ func (s *Store) SaveSnapshot(name string) (SnapshotInfo, error) {
 	if _, err := writeSnapshotBytes(filepath.Join(temporary, "manifest.json"), "manifest.json", manifestRaw); err != nil {
 		return SnapshotInfo{}, err
 	}
+	if err := syncDirectory(objectsDir); err != nil {
+		return SnapshotInfo{}, err
+	}
+	if err := syncDirectory(temporary); err != nil {
+		return SnapshotInfo{}, err
+	}
 	if err := os.Rename(temporary, destination); err != nil {
 		if _, statErr := os.Lstat(destination); statErr == nil {
 			return SnapshotInfo{}, ErrSnapshotExists
 		}
 		return SnapshotInfo{}, err
 	}
+	_ = syncDirectory(root)
 	return manifest.info(), nil
 }
 
@@ -158,6 +188,9 @@ func (s *Store) LoadSnapshot(name string) (SnapshotInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := recoverSnapshotRestore(s.dir); err != nil {
+		return SnapshotInfo{}, err
+	}
 	loaded, err := readSnapshot(s.dir, name)
 	if err != nil {
 		return SnapshotInfo{}, err
@@ -181,24 +214,260 @@ func (s *Store) LoadSnapshot(name string) (SnapshotInfo, error) {
 	if err := os.Remove(backup); err != nil {
 		return SnapshotInfo{}, err
 	}
-	if err := os.Rename(s.objects, backup); err != nil {
+	targetRaw, err := encodeSnapshot(loaded.data)
+	if err != nil {
 		return SnapshotInfo{}, err
+	}
+	targetHash := sha256.Sum256(targetRaw)
+	journal := snapshotRestoreJournal{
+		SchemaVersion:     snapshotRestoreJournalVersion,
+		BackupDirectory:   filepath.Base(backup),
+		StageDirectory:    filepath.Base(stage),
+		TargetStateSHA256: hex.EncodeToString(targetHash[:]),
+	}
+	if err := writeSnapshotRestoreJournal(s.dir, journal); err != nil {
+		_ = recoverSnapshotRestore(s.dir)
+		return SnapshotInfo{}, err
+	}
+	if err := os.Rename(s.objects, backup); err != nil {
+		recoveryErr := recoverSnapshotRestore(s.dir)
+		return SnapshotInfo{}, errors.Join(err, recoveryErr)
+	}
+	if err := syncDirectory(s.dir); err != nil {
+		recoveryErr := recoverSnapshotRestore(s.dir)
+		return SnapshotInfo{}, errors.Join(err, recoveryErr)
 	}
 	if err := os.Rename(filepath.Join(stage, "objects"), s.objects); err != nil {
-		_ = os.Rename(backup, s.objects)
-		return SnapshotInfo{}, err
+		recoveryErr := recoverSnapshotRestore(s.dir)
+		return SnapshotInfo{}, errors.Join(err, recoveryErr)
+	}
+	if err := syncDirectory(s.dir); err != nil {
+		recoveryErr := recoverSnapshotRestore(s.dir)
+		return SnapshotInfo{}, errors.Join(err, recoveryErr)
 	}
 
-	previous := s.data
 	s.data = loaded.data
 	if err := s.saveLocked(); err != nil {
-		s.data = previous
-		_ = os.RemoveAll(s.objects)
-		_ = os.Rename(backup, s.objects)
-		return SnapshotInfo{}, err
+		recoveryErr := recoverSnapshotRestore(s.dir)
+		return SnapshotInfo{}, errors.Join(err, recoveryErr)
 	}
-	_ = os.RemoveAll(backup)
+	// At this point state.json is the commit record. Recovery recognizes the
+	// target digest and finishes deleting the old object generation and journal.
+	_ = recoverSnapshotRestore(s.dir)
 	return loaded.info, nil
+}
+
+func writeSnapshotRestoreJournal(dataDir string, journal snapshotRestoreJournal) error {
+	path := filepath.Join(dataDir, snapshotRestoreJournalFile)
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("%w: unfinished snapshot restore journal exists", ErrStateCorrupt)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	raw, err := json.MarshalIndent(journal, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	temporary, err := os.CreateTemp(dataDir, ".snapshot-restore-journal-*")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(raw); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := syncDirectory(dataDir); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryName, path); err != nil {
+		return err
+	}
+	return syncDirectory(dataDir)
+}
+
+// recoverSnapshotRestore resolves every crash point in LoadSnapshot. state.json
+// is the commit record: a matching digest keeps the new object generation;
+// every other state restores the backup generation.
+func recoverSnapshotRestore(dataDir string) error {
+	journalPath := filepath.Join(dataDir, snapshotRestoreJournalFile)
+	info, err := os.Lstat(journalPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 16<<10 {
+		return fmt.Errorf("%w: invalid snapshot restore journal", ErrStateCorrupt)
+	}
+	raw, err := os.ReadFile(journalPath)
+	if err != nil {
+		return err
+	}
+	var journal snapshotRestoreJournal
+	if err := json.Unmarshal(raw, &journal); err != nil {
+		return fmt.Errorf("%w: decode snapshot restore journal: %v", ErrStateCorrupt, err)
+	}
+	if err := validateSnapshotRestoreJournal(journal); err != nil {
+		return err
+	}
+
+	currentDigest, err := persistedStateDigest(filepath.Join(dataDir, "state.json"))
+	if err != nil {
+		return err
+	}
+	backup := filepath.Join(dataDir, journal.BackupDirectory)
+	stage := filepath.Join(dataDir, journal.StageDirectory)
+	stagedObjects := filepath.Join(stage, "objects")
+	objects := filepath.Join(dataDir, "objects")
+
+	if strings.EqualFold(currentDigest, journal.TargetStateSHA256) {
+		objectsExist, err := directoryExists(objects)
+		if err != nil {
+			return err
+		}
+		if !objectsExist {
+			stagedObjectsExist, err := directoryExists(stagedObjects)
+			if err != nil {
+				return err
+			}
+			backupExists, err := directoryExists(backup)
+			if err != nil {
+				return err
+			}
+			switch {
+			case stagedObjectsExist:
+				if err := os.Rename(stagedObjects, objects); err != nil {
+					return err
+				}
+			case backupExists:
+				// A restore of a snapshot identical to the live state can
+				// crash after moving the live objects but before installing
+				// the staged generation. The backup still matches state.json.
+				if err := os.Rename(backup, objects); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("%w: restored object directory is missing", ErrStateCorrupt)
+			}
+		}
+		if err := removeDirectoryIfPresent(backup); err != nil {
+			return err
+		}
+	} else {
+		backupExists, err := directoryExists(backup)
+		if err != nil {
+			return err
+		}
+		if backupExists {
+			if err := removeDirectoryIfPresent(objects); err != nil {
+				return err
+			}
+			if err := os.Rename(backup, objects); err != nil {
+				return err
+			}
+		} else if err := requireDirectory(objects, "live object directory"); err != nil {
+			return err
+		}
+	}
+	if err := removeDirectoryIfPresent(stage); err != nil {
+		return err
+	}
+	if err := syncDirectory(dataDir); err != nil {
+		return err
+	}
+	if err := os.Remove(journalPath); err != nil {
+		return err
+	}
+	return syncDirectory(dataDir)
+}
+
+func validateSnapshotRestoreJournal(journal snapshotRestoreJournal) error {
+	validDirectory := func(name, prefix string) bool {
+		return filepath.Base(name) == name && strings.HasPrefix(name, prefix) && name != prefix
+	}
+	digest, err := hex.DecodeString(journal.TargetStateSHA256)
+	if journal.SchemaVersion != snapshotRestoreJournalVersion ||
+		!validDirectory(journal.BackupDirectory, ".objects-backup-") ||
+		!validDirectory(journal.StageDirectory, ".snapshot-restore-") ||
+		err != nil || len(digest) != sha256.Size {
+		return fmt.Errorf("%w: unsupported snapshot restore journal", ErrStateCorrupt)
+	}
+	return nil
+}
+
+func persistedStateDigest(path string) (string, error) {
+	raw, err := readPersistentStateFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var data snapshot
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return "", fmt.Errorf("%w: decode state during snapshot recovery: %v", ErrStateCorrupt, err)
+	}
+	if err := validateSnapshotStructure(data); err != nil {
+		return "", fmt.Errorf("%w: state during snapshot recovery: %v", ErrStateCorrupt, err)
+	}
+	normalizeSnapshot(&data)
+	canonical, err := encodeSnapshot(data)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(canonical)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+func directoryExists(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("%w: %s is not a directory", ErrStateCorrupt, filepath.Base(path))
+	}
+	return true, nil
+}
+
+func requireDirectory(path, label string) error {
+	exists, err := directoryExists(path)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("%w: %s is missing", ErrStateCorrupt, label)
+	}
+	return nil
+}
+
+func removeDirectoryIfPresent(path string) error {
+	exists, err := directoryExists(path)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	return os.RemoveAll(path)
 }
 
 func (s *Store) DeleteSnapshot(name string) error {
@@ -219,7 +488,11 @@ func (s *Store) DeleteSnapshot(name string) error {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%w: snapshot path is not a directory", ErrSnapshotCorrupt)
 	}
-	return os.RemoveAll(destination)
+	if err := os.RemoveAll(destination); err != nil {
+		return err
+	}
+	_ = syncDirectory(filepath.Dir(destination))
+	return nil
 }
 
 // MaterializeSnapshot copies a named snapshot into an empty data directory.
@@ -294,6 +567,9 @@ func readSnapshot(dataDir, name string) (loadedSnapshot, error) {
 	var data snapshot
 	if err := json.Unmarshal(stateRaw, &data); err != nil {
 		return loadedSnapshot{}, fmt.Errorf("%w: decode state: %v", ErrSnapshotCorrupt, err)
+	}
+	if err := validateSnapshotStructure(data); err != nil {
+		return loadedSnapshot{}, fmt.Errorf("%w: %v", ErrSnapshotCorrupt, err)
 	}
 	normalizeSnapshot(&data)
 	referenced, err := referencedObjectFiles(data)
@@ -376,7 +652,10 @@ func materializeLoadedSnapshot(loaded loadedSnapshot, targetDir string) error {
 			return err
 		}
 	}
-	return nil
+	if err := syncDirectory(objectsDir); err != nil {
+		return err
+	}
+	return syncDirectory(targetDir)
 }
 
 func ensureSnapshotRoot(dataDir string) (string, error) {

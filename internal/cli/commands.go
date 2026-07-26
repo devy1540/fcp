@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/devy1540/fcp/internal/reliability"
 )
 
 const (
@@ -268,6 +270,51 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 			"services": len(verified), "full": fullCount, "partial": partialCount,
 		},
 		"services": verified,
+	})
+	if !ok {
+		return 1
+	}
+	return 0
+}
+
+func runReliability(args []string, stdout, stderr io.Writer) int {
+	flags := newFlagSet("reliability", stderr)
+	endpoint := flags.String("endpoint", defaultEndpoint, "FCP HTTP endpoint")
+	minimum := flags.Int("minimum", reliability.RecommendedMinimum, "minimum accepted score")
+	timeout := flags.Duration("timeout", 3*time.Second, "request timeout")
+	_ = flags.Bool("json", true, "emit JSON")
+	if !parseFlags(flags, args, stderr) {
+		return 2
+	}
+	if *minimum < 0 || *minimum > 100 {
+		writeCLIError(stderr, "reliability", "invalid_minimum", "minimum must be between 0 and 100")
+		return 2
+	}
+	client, err := newAPIClient(*endpoint, *timeout)
+	if err != nil {
+		writeCLIError(stderr, "reliability", "invalid_endpoint", err.Error())
+		return 2
+	}
+	var dashboard dashboardResponse
+	if err := client.getJSON("/_fcp/dashboard?view=reliability", &dashboard); err != nil {
+		writeCLIError(stderr, "reliability", "request_failed", err.Error())
+		return 1
+	}
+	if err := reliability.Validate(dashboard.Reliability); err != nil {
+		writeCLIError(stderr, "reliability", "invalid_response", err.Error())
+		return 1
+	}
+	ok := dashboard.Reliability.Score >= *minimum && len(dashboard.Reliability.AppliedCaps) == 0
+	_ = writeJSON(stdout, map[string]any{
+		"schemaVersion": schemaVersion,
+		"command":       "reliability",
+		"ok":            ok,
+		"endpoint":      client.endpoint,
+		"project":       dashboard.Project,
+		"minimum":       *minimum,
+		"runtimeReady":  dashboard.Summary.ServiceCount > 0,
+		"assessment":    dashboard.Reliability,
+		"note":          "The score measures versioned local-emulator evidence, not the latest CI run or full AWS/GCP parity.",
 	})
 	if !ok {
 		return 1

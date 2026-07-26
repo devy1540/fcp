@@ -45,7 +45,7 @@ fcp exec --profile demo -- ./gradlew test
 fcp exec --snapshot clean --data-dir .fcp --profile demo -- pnpm test
 ```
 
-The command receives loopback HTTP and GCP gRPC endpoints through environment variables. FCP uses a temporary data directory, cleans it up after the command, and returns the command's exit code.
+The command receives loopback HTTP and GCP gRPC endpoints through environment variables. FCP uses a temporary data directory, cleans it up after the command, and returns the command's exit code. `fcp exec` defaults to `--integrity-mode strict`, rechecking S3, GCS, multipart, and snapshot object bodies while tests run. A normal long-running server defaults to the lighter `startup` mode; use `--integrity-mode strict` when runtime file-tamper detection matters.
 
 ## Manage test baselines
 
@@ -80,6 +80,7 @@ Run:
 ```bash
 fcp verify --service gcs --json
 fcp verify --strict --json
+fcp reliability --minimum 85 --json
 ```
 
 Interpret results precisely:
@@ -89,6 +90,8 @@ Interpret results precisely:
 - `SDK` evidence names a client version with a compatibility test.
 - `CONTRACT` evidence covers a directly tested HTTP request/response path.
 - Runtime verification only proves the local process exposes the declared contract. Run repository SDK tests when changing protocols or client versions.
+- The reliability score measures versioned local-emulator evidence across API fidelity, client realism, durability, failure isolation, security, and release traceability. It is not the latest CI result or a cloud-parity percentage.
+- Treat a score below the command's requested minimum, any applied hard cap, or `"ok": false` as insufficient evidence for the requested local test scope.
 
 Use real AWS/GCP for IAM and signature enforcement, quotas, performance, multi-region behavior, distributed consistency, vendor-specific delivery, and final release confidence.
 

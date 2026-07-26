@@ -1,6 +1,8 @@
 package state
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -135,6 +137,187 @@ func TestSnapshotRejectsInvalidNamesDirtyTargetsAndCorruption(t *testing.T) {
 	if _, err := store.LoadSnapshot("baseline"); !errors.Is(err, ErrSnapshotCorrupt) {
 		t.Fatalf("tampered snapshot should fail: %v", err)
 	}
+}
+
+func TestSnapshotRestoreJournalRecoversEveryCrashPoint(t *testing.T) {
+	for _, phase := range []string{"journal-written", "backup-renamed", "objects-swapped", "state-committed"} {
+		t.Run(phase, func(t *testing.T) {
+			dataDir := prepareSnapshotRestoreCrash(t, phase)
+			store, err := Open(dataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			_, body, err := store.GetObject("assets", "hello.txt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "old"
+			if phase == "state-committed" {
+				want = "new"
+			}
+			if string(body) != want {
+				t.Fatalf("recovered body=%q want=%q", body, want)
+			}
+			for _, path := range []string{
+				filepath.Join(dataDir, snapshotRestoreJournalFile),
+				filepath.Join(dataDir, ".objects-backup-crash-test"),
+				filepath.Join(dataDir, ".snapshot-restore-crash-test"),
+			} {
+				if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("recovery artifact still exists at %s: %v", path, err)
+				}
+			}
+		})
+	}
+}
+
+func TestSnapshotRestoreJournalRecoversIdenticalStateAfterBackupRename(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateBucket("assets"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutObject("assets", "hello.txt", []byte("same"), "text/plain", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveSnapshot("identical"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := readSnapshot(dataDir, "identical")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := filepath.Join(dataDir, ".snapshot-restore-identical")
+	if err := os.Mkdir(stage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := materializeLoadedSnapshot(loaded, stage); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(dataDir, ".objects-backup-identical")
+	targetRaw, err := encodeSnapshot(loaded.data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetHash := sha256.Sum256(targetRaw)
+	if err := writeSnapshotRestoreJournal(dataDir, snapshotRestoreJournal{
+		SchemaVersion:     snapshotRestoreJournalVersion,
+		BackupDirectory:   filepath.Base(backup),
+		StageDirectory:    filepath.Base(stage),
+		TargetStateSHA256: hex.EncodeToString(targetHash[:]),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(dataDir, "objects"), backup); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	_, body, err := reopened.GetObject("assets", "hello.txt")
+	if err != nil || string(body) != "same" {
+		t.Fatalf("identical-state recovery failed: body=%q err=%v", body, err)
+	}
+	for _, path := range []string{
+		filepath.Join(dataDir, snapshotRestoreJournalFile),
+		backup,
+		stage,
+	} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("recovery artifact still exists at %s: %v", path, err)
+		}
+	}
+}
+
+func prepareSnapshotRestoreCrash(t *testing.T, phase string) string {
+	t.Helper()
+	dataDir := t.TempDir()
+	store, err := Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateBucket("assets"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutObject("assets", "hello.txt", []byte("old"), "text/plain", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutObject("assets", "hello.txt", []byte("new"), "text/plain", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveSnapshot("target"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutObject("assets", "hello.txt", []byte("old"), "text/plain", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := readSnapshot(dataDir, "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := filepath.Join(dataDir, ".snapshot-restore-crash-test")
+	if err := os.Mkdir(stage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := materializeLoadedSnapshot(loaded, stage); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(dataDir, ".objects-backup-crash-test")
+	targetRaw, err := encodeSnapshot(loaded.data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetHash := sha256.Sum256(targetRaw)
+	journal := snapshotRestoreJournal{
+		SchemaVersion:     snapshotRestoreJournalVersion,
+		BackupDirectory:   filepath.Base(backup),
+		StageDirectory:    filepath.Base(stage),
+		TargetStateSHA256: hex.EncodeToString(targetHash[:]),
+	}
+	if err := writeSnapshotRestoreJournal(dataDir, journal); err != nil {
+		t.Fatal(err)
+	}
+	if phase == "journal-written" {
+		return dataDir
+	}
+	if err := os.Rename(filepath.Join(dataDir, "objects"), backup); err != nil {
+		t.Fatal(err)
+	}
+	if phase == "backup-renamed" {
+		return dataDir
+	}
+	if err := os.Rename(filepath.Join(stage, "objects"), filepath.Join(dataDir, "objects")); err != nil {
+		t.Fatal(err)
+	}
+	if phase == "objects-swapped" {
+		return dataDir
+	}
+	if phase != "state-committed" {
+		t.Fatalf("unknown crash phase %q", phase)
+	}
+	temporary := filepath.Join(dataDir, ".state-crash-test")
+	if err := os.WriteFile(temporary, targetRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(temporary, filepath.Join(dataDir, "state.json")); err != nil {
+		t.Fatal(err)
+	}
+	return dataDir
 }
 
 func assertSnapshotData(t *testing.T, store *Store, secretName string) {

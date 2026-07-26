@@ -66,10 +66,8 @@ func (s *Store) MutateFirestore(mutate func(map[string]*FirestoreDocument, time.
 	if err := mutate(working, s.now().UTC()); err != nil {
 		return err
 	}
-	previous := s.data.FirestoreDocuments
 	s.data.FirestoreDocuments = working
 	if err := s.saveLocked(); err != nil {
-		s.data.FirestoreDocuments = previous
 		return err
 	}
 	return nil
@@ -109,7 +107,6 @@ func (s *Store) CreateSecret(name string, labels map[string]string) (Secret, err
 	secret := &Secret{Name: name, Labels: cloneStringMap(labels), CreateTime: s.now().UTC()}
 	s.data.Secrets[name] = secret
 	if err := s.saveLocked(); err != nil {
-		delete(s.data.Secrets, name)
 		return Secret{}, err
 	}
 	return cloneSecret(secret), nil
@@ -121,6 +118,20 @@ func (s *Store) Secret(name string) (Secret, error) {
 	secret, ok := s.data.Secrets[name]
 	if !ok {
 		return Secret{}, ErrSecretNotFound
+	}
+	return cloneSecret(secret), nil
+}
+
+func (s *Store) UpdateSecretLabels(name string, labels map[string]string) (Secret, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	secret, ok := s.data.Secrets[name]
+	if !ok {
+		return Secret{}, ErrSecretNotFound
+	}
+	secret.Labels = cloneStringMap(labels)
+	if err := s.saveLocked(); err != nil {
+		return Secret{}, err
 	}
 	return cloneSecret(secret), nil
 }
@@ -145,13 +156,12 @@ func (s *Store) ListSecrets(parent string) []Secret {
 func (s *Store) DeleteSecret(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	secret, ok := s.data.Secrets[name]
+	_, ok := s.data.Secrets[name]
 	if !ok {
 		return ErrSecretNotFound
 	}
 	delete(s.data.Secrets, name)
 	if err := s.saveLocked(); err != nil {
-		s.data.Secrets[name] = secret
 		return err
 	}
 	return nil
@@ -172,7 +182,6 @@ func (s *Store) AddSecretVersion(name string, payload []byte) (SecretVersion, er
 	}
 	secret.Versions = append(secret.Versions, version)
 	if err := s.saveLocked(); err != nil {
-		secret.Versions = secret.Versions[:len(secret.Versions)-1]
 		return SecretVersion{}, err
 	}
 	return version, nil
@@ -214,15 +223,11 @@ func (s *Store) SetSecretVersionState(name string, number int64, versionState st
 		if secret.Versions[i].Number != number {
 			continue
 		}
-		previousState := secret.Versions[i].State
-		previousPayload := append([]byte(nil), secret.Versions[i].Payload...)
 		secret.Versions[i].State = versionState
 		if versionState == "DESTROYED" {
 			secret.Versions[i].Payload = nil
 		}
 		if err := s.saveLocked(); err != nil {
-			secret.Versions[i].State = previousState
-			secret.Versions[i].Payload = previousPayload
 			return SecretVersion{}, err
 		}
 		return secret.Versions[i], nil

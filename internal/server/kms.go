@@ -414,6 +414,9 @@ func crc32c(data []byte) int64 {
 }
 
 func kmsError(err error) error {
+	if errors.Is(err, state.ErrKMSInvalidName) {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
 	if errors.Is(err, state.ErrKMSKeyRingNotFound) || errors.Is(err, state.ErrKMSCryptoKeyNotFound) || errors.Is(err, state.ErrKMSKeyVersionMissing) {
 		return status.Error(codes.NotFound, err.Error())
 	}

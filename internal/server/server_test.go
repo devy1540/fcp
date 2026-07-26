@@ -261,7 +261,119 @@ func TestS3MultipartUploadLifecycle(t *testing.T) {
 	}
 }
 
+func TestS3BucketLifecycleAndErrors(t *testing.T) {
+	server := newTestServer(t)
+	s3Call(t, http.MethodPut, server.URL+"/assets", nil, nil)
+	s3Call(t, http.MethodPut, server.URL+"/logs", nil, nil)
+	listed := s3Call(t, http.MethodGet, server.URL+"/", nil, nil)
+	if !bytes.Contains(listed, []byte("<Name>assets</Name>")) || !bytes.Contains(listed, []byte("<Name>logs</Name>")) {
+		t.Fatalf("unexpected bucket list: %s", listed)
+	}
+	s3Call(t, http.MethodPut, server.URL+"/assets/hello.txt", strings.NewReader("hello"), nil)
+	notEmpty := s3CallResponse(t, http.MethodDelete, server.URL+"/assets", nil, nil)
+	notEmptyBody, _ := io.ReadAll(notEmpty.Body)
+	notEmpty.Body.Close()
+	if notEmpty.StatusCode != http.StatusConflict || !bytes.Contains(notEmptyBody, []byte("<Code>BucketNotEmpty</Code>")) {
+		t.Fatalf("non-empty bucket delete status=%d body=%s", notEmpty.StatusCode, notEmptyBody)
+	}
+	s3Call(t, http.MethodDelete, server.URL+"/assets/hello.txt", nil, nil)
+	s3Call(t, http.MethodDelete, server.URL+"/assets", nil, nil)
+	s3Call(t, http.MethodDelete, server.URL+"/logs", nil, nil)
+	missing := s3CallResponse(t, http.MethodHead, server.URL+"/assets", nil, nil)
+	missing.Body.Close()
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("deleted bucket status=%d", missing.StatusCode)
+	}
+	unsupported := s3CallResponse(t, http.MethodPatch, server.URL+"/missing", nil, nil)
+	unsupported.Body.Close()
+	if unsupported.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("unsupported S3 method status=%d", unsupported.StatusCode)
+	}
+}
+
+func TestSQSBatchesAttributesAndErrors(t *testing.T) {
+	server := newTestServer(t)
+	sqsCall(t, server.URL, "CreateQueue", map[string]any{
+		"QueueName": "jobs", "Attributes": map[string]string{"VisibilityTimeout": "30"},
+	})
+	queueURL := server.URL + "/000000000000/jobs"
+	batch := sqsCall(t, server.URL, "SendMessageBatch", map[string]any{
+		"QueueUrl": queueURL,
+		"Entries": []map[string]any{
+			{"Id": "one", "MessageBody": "first"},
+			{"Id": "two", "MessageBody": "second", "MessageAttributes": map[string]any{"env": map[string]string{"DataType": "String", "StringValue": "test"}}},
+		},
+	})
+	var sent struct {
+		Successful []map[string]any `json:"Successful"`
+		Failed     []map[string]any `json:"Failed"`
+	}
+	if err := json.Unmarshal(batch, &sent); err != nil || len(sent.Successful) != 2 || len(sent.Failed) != 0 {
+		t.Fatalf("unexpected send batch: response=%s err=%v", batch, err)
+	}
+	missingBatch := sqsCall(t, server.URL, "SendMessageBatch", map[string]any{
+		"QueueUrl": server.URL + "/000000000000/missing",
+		"Entries":  []map[string]any{{"Id": "missing", "MessageBody": "body"}},
+	})
+	if err := json.Unmarshal(missingBatch, &sent); err != nil || len(sent.Failed) != 1 || sent.Failed[0]["Code"] != "AWS.SimpleQueueService.NonExistentQueue" {
+		t.Fatalf("unexpected missing queue batch: response=%s err=%v", missingBatch, err)
+	}
+	receivedRaw := sqsCall(t, server.URL, "ReceiveMessage", map[string]any{
+		"QueueUrl": queueURL, "MaxNumberOfMessages": 2, "AttributeNames": []string{"All"}, "MessageAttributeNames": []string{"All"},
+	})
+	var received struct {
+		Messages []struct {
+			ReceiptHandle string `json:"ReceiptHandle"`
+		} `json:"Messages"`
+	}
+	if err := json.Unmarshal(receivedRaw, &received); err != nil || len(received.Messages) != 2 {
+		t.Fatalf("unexpected receive batch: response=%s err=%v", receivedRaw, err)
+	}
+	attributes := sqsCall(t, server.URL, "GetQueueAttributes", map[string]any{
+		"QueueUrl": queueURL, "AttributeNames": []string{"VisibilityTimeout"},
+	})
+	if !bytes.Contains(attributes, []byte(`"VisibilityTimeout":"30"`)) || bytes.Contains(attributes, []byte(`"DelaySeconds"`)) {
+		t.Fatalf("unexpected selected attributes: %s", attributes)
+	}
+	deletedRaw := sqsCall(t, server.URL, "DeleteMessageBatch", map[string]any{
+		"QueueUrl": queueURL,
+		"Entries": []map[string]any{
+			{"Id": "valid", "ReceiptHandle": received.Messages[0].ReceiptHandle},
+			{"Id": "invalid", "ReceiptHandle": "invalid-receipt"},
+		},
+	})
+	var deleted struct {
+		Successful []map[string]any `json:"Successful"`
+		Failed     []map[string]any `json:"Failed"`
+	}
+	if err := json.Unmarshal(deletedRaw, &deleted); err != nil || len(deleted.Successful) != 1 || len(deleted.Failed) != 1 {
+		t.Fatalf("unexpected delete batch: response=%s err=%v", deletedRaw, err)
+	}
+	sqsCall(t, server.URL, "DeleteQueue", map[string]any{"QueueUrl": queueURL})
+	missing := sqsCallResponse(t, server.URL, "SendMessage", map[string]any{"QueueUrl": queueURL, "MessageBody": "missing"})
+	missing.Body.Close()
+	if missing.StatusCode != http.StatusBadRequest || missing.Header.Get("x-amzn-ErrorType") != "AWS.SimpleQueueService.NonExistentQueue" {
+		t.Fatalf("missing queue status=%d error=%q", missing.StatusCode, missing.Header.Get("x-amzn-ErrorType"))
+	}
+	unknown := sqsCallResponse(t, server.URL, "UnknownOperation", map[string]any{})
+	unknown.Body.Close()
+	if unknown.StatusCode != http.StatusBadRequest || unknown.Header.Get("x-amzn-ErrorType") != "UnsupportedOperation" {
+		t.Fatalf("unknown operation status=%d error=%q", unknown.StatusCode, unknown.Header.Get("x-amzn-ErrorType"))
+	}
+}
+
 func sqsCall(t *testing.T, endpoint, operation string, body any) []byte {
+	t.Helper()
+	resp := sqsCallResponse(t, endpoint, operation, body)
+	defer resp.Body.Close()
+	result, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		t.Fatalf("SQS %s returned %d: %s", operation, resp.StatusCode, result)
+	}
+	return result
+}
+
+func sqsCallResponse(t *testing.T, endpoint, operation string, body any) *http.Response {
 	t.Helper()
 	raw, _ := json.Marshal(body)
 	req, err := http.NewRequest(http.MethodPost, endpoint+"/", bytes.NewReader(raw))
@@ -274,15 +386,21 @@ func sqsCall(t *testing.T, endpoint, operation string, body any) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return resp
+}
+
+func s3Call(t *testing.T, method, endpoint string, body io.Reader, headers map[string]string) []byte {
+	t.Helper()
+	resp := s3CallResponse(t, method, endpoint, body, headers)
 	defer resp.Body.Close()
 	result, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		t.Fatalf("SQS %s returned %d: %s", operation, resp.StatusCode, result)
+		t.Fatalf("S3 %s returned %d: %s", endpoint, resp.StatusCode, result)
 	}
 	return result
 }
 
-func s3Call(t *testing.T, method, endpoint string, body io.Reader, headers map[string]string) []byte {
+func s3CallResponse(t *testing.T, method, endpoint string, body io.Reader, headers map[string]string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(method, endpoint, body)
 	if err != nil {
@@ -295,10 +413,5 @@ func s3Call(t *testing.T, method, endpoint string, body io.Reader, headers map[s
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	result, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
-		t.Fatalf("S3 %s returned %d: %s", endpoint, resp.StatusCode, result)
-	}
-	return result
+	return resp
 }

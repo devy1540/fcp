@@ -8,6 +8,7 @@ import (
 )
 
 var (
+	ErrKMSInvalidName       = errors.New("Cloud KMS resource name is invalid")
 	ErrKMSKeyRingNotFound   = errors.New("Cloud KMS key ring not found")
 	ErrKMSCryptoKeyNotFound = errors.New("Cloud KMS crypto key not found")
 	ErrKMSKeyVersionMissing = errors.New("Cloud KMS key version not found")
@@ -54,7 +55,6 @@ func (s *Store) CreateKMSKeyRing(name string) (KMSKeyRing, error) {
 	keyRing := &KMSKeyRing{Name: name, CreateTime: s.now().UTC()}
 	s.data.KMSKeyRings[name] = keyRing
 	if err := s.saveLocked(); err != nil {
-		delete(s.data.KMSKeyRings, name)
 		return KMSKeyRing{}, err
 	}
 	return *keyRing, nil
@@ -90,7 +90,11 @@ func (s *Store) ListKMSKeyRings(parent string) []KMSKeyRing {
 func (s *Store) CreateKMSCryptoKey(key KMSCryptoKey) (KMSCryptoKey, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	keyRingName := key.Name[:strings.LastIndex(key.Name, "/cryptoKeys/")]
+	separator := strings.LastIndex(key.Name, "/cryptoKeys/")
+	if separator <= 0 || separator+len("/cryptoKeys/") == len(key.Name) {
+		return KMSCryptoKey{}, ErrKMSInvalidName
+	}
+	keyRingName := key.Name[:separator]
 	if _, ok := s.data.KMSKeyRings[keyRingName]; !ok {
 		return KMSCryptoKey{}, ErrKMSKeyRingNotFound
 	}
@@ -100,7 +104,6 @@ func (s *Store) CreateKMSCryptoKey(key KMSCryptoKey) (KMSCryptoKey, error) {
 	cloned := cloneKMSCryptoKey(&key)
 	s.data.KMSCryptoKeys[key.Name] = &cloned
 	if err := s.saveLocked(); err != nil {
-		delete(s.data.KMSCryptoKeys, key.Name)
 		return KMSCryptoKey{}, err
 	}
 	return cloneKMSCryptoKey(&cloned), nil
@@ -152,7 +155,6 @@ func (s *Store) AddKMSKeyVersion(name, algorithm string, material []byte) (KMSKe
 		key.PrimaryVersion = version.Number
 	}
 	if err := s.saveLocked(); err != nil {
-		key.Versions = key.Versions[:len(key.Versions)-1]
 		return KMSKeyVersion{}, err
 	}
 	return version, nil

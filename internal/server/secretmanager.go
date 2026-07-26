@@ -69,17 +69,24 @@ func (s *secretManagerServer) ListSecrets(_ context.Context, request *secretmana
 }
 
 func (s *secretManagerServer) UpdateSecret(_ context.Context, request *secretmanagerpb.UpdateSecretRequest) (*secretmanagerpb.Secret, error) {
-	// FCP only reads secrets. Returning the current metadata for an empty update
-	// mask keeps official SDK setup code compatible without pretending to support
-	// rotation or replication updates.
+	updateLabels := false
 	if request.GetUpdateMask() != nil && len(request.GetUpdateMask().GetPaths()) > 0 {
 		for _, path := range request.GetUpdateMask().GetPaths() {
 			if path != "labels" {
 				return nil, status.Errorf(codes.Unimplemented, "secret update field %q is not supported", path)
 			}
+			updateLabels = true
 		}
 	}
-	secret, err := s.store.Secret(request.GetSecret().GetName())
+	var (
+		secret state.Secret
+		err    error
+	)
+	if updateLabels {
+		secret, err = s.store.UpdateSecretLabels(request.GetSecret().GetName(), request.GetSecret().GetLabels())
+	} else {
+		secret, err = s.store.Secret(request.GetSecret().GetName())
+	}
 	if err != nil {
 		return nil, secretManagerError(err)
 	}

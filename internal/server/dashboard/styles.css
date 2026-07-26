@@ -398,6 +398,14 @@ main {
   background: #7057b5;
 }
 
+.summary-card[data-tone="RELIABILITY"]::before {
+  background: var(--green);
+}
+
+.summary-card[data-tone="EVIDENCE"]::before {
+  background: #7057b5;
+}
+
 .summary-card.is-loading::after {
   position: absolute;
   inset: 14px;
@@ -727,6 +735,10 @@ main {
   color: var(--color-text-primary);
 }
 
+.verification-limitations p {
+  margin: 4px 0 0;
+}
+
 .verification-limitations ul {
   margin: 4px 0 0;
   padding-left: 16px;
@@ -752,6 +764,14 @@ main {
 
 .verification-note[data-level="OVERVIEW"] strong {
   color: var(--color-text-primary);
+}
+
+.verification-note[data-level="RELIABILITY"] strong {
+  color: var(--green);
+}
+
+.reliability-details .verification-operation-list {
+  margin-top: 0;
 }
 
 .toolbar-actions {

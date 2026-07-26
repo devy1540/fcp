@@ -1,0 +1,43 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      timezone: Asia/Seoul
+    groups:
+      go-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      timezone: Asia/Seoul
+    groups:
+      workflow-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      timezone: Asia/Seoul
+
+  - package-ecosystem: npm
+    directory: /test-clients/javascript
+    schedule:
+      interval: weekly
+      timezone: Asia/Seoul
+    groups:
+      javascript-sdk-clients:
+        patterns: ["*"]
+
+  - package-ecosystem: gradle
+    directory: /test-clients/jvm
+    schedule:
+      interval: weekly
+      timezone: Asia/Seoul
+    groups:
+      jvm-sdk-clients:
+        patterns: ["*"]

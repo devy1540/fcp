@@ -23,11 +23,13 @@ type Config struct {
 	ProjectID              string
 	MetadataServiceAccount string
 	CredentialsOut         string
+	IntegrityMode          state.IntegrityMode
 	Version                string
 	Logger                 *log.Logger
 }
 
 type Runtime struct {
+	store        *state.Store
 	httpListener net.Listener
 	gcpListener  net.Listener
 	httpServer   *http.Server
@@ -38,25 +40,29 @@ type Runtime struct {
 
 func Start(config Config) (*Runtime, error) {
 	config = withDefaults(config)
-	store, err := state.Open(config.DataDir)
+	store, err := state.OpenWithOptions(config.DataDir, state.OpenOptions{IntegrityMode: config.IntegrityMode})
 	if err != nil {
 		return nil, fmt.Errorf("open state: %w", err)
 	}
 	if err := seedProfile(store, config); err != nil {
+		_ = store.Close()
 		return nil, err
 	}
 
 	gcpListener, err := net.Listen("tcp", config.GCPListen)
 	if err != nil {
+		_ = store.Close()
 		return nil, fmt.Errorf("listen for GCP APIs: %w", err)
 	}
 	httpListener, err := net.Listen("tcp", config.Listen)
 	if err != nil {
 		_ = gcpListener.Close()
+		_ = store.Close()
 		return nil, fmt.Errorf("listen for HTTP APIs: %w", err)
 	}
 
 	fcpRuntime := &Runtime{
+		store:        store,
 		httpListener: httpListener,
 		gcpListener:  gcpListener,
 		httpServer: &http.Server{
@@ -73,7 +79,7 @@ func Start(config Config) (*Runtime, error) {
 	}
 
 	fcpRuntime.logger.Printf("FCP GCP gRPC APIs listening on %s", fcpRuntime.GCPAddress())
-	fcpRuntime.logger.Printf("FCP %s listening on %s (data: %s)", config.Version, fcpRuntime.HTTPEndpoint(), config.DataDir)
+	fcpRuntime.logger.Printf("FCP %s listening on %s (data: %s, integrity: %s)", config.Version, fcpRuntime.HTTPEndpoint(), config.DataDir, config.IntegrityMode)
 	go func() {
 		if serveErr := fcpRuntime.gcpServer.Serve(gcpListener); serveErr != nil {
 			fcpRuntime.reportError(fmt.Errorf("serve GCP APIs: %w", serveErr))
@@ -113,7 +119,7 @@ func (r *Runtime) Close(ctx context.Context) error {
 	}
 	_ = r.httpListener.Close()
 	_ = r.gcpListener.Close()
-	return httpErr
+	return errors.Join(httpErr, r.store.Close())
 }
 
 func (r *Runtime) reportError(err error) {
@@ -136,6 +142,9 @@ func withDefaults(config Config) Config {
 	}
 	if config.ProjectID == "" {
 		config.ProjectID = "fcp-local"
+	}
+	if config.IntegrityMode == "" {
+		config.IntegrityMode = state.IntegrityModeStartup
 	}
 	if config.Version == "" {
 		config.Version = "dev"

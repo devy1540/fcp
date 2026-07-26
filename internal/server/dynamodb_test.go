@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/devy1540/fcp/internal/state"
 )
 
 func TestDynamoDBDemoCoreLifecycle(t *testing.T) {
@@ -203,6 +205,59 @@ func TestSTSGetCallerIdentity(t *testing.T) {
 	}
 	if response.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("<Account>000000000000</Account>")) || !bytes.Contains(body, []byte("arn:aws:iam::000000000000:user/fcp-local")) {
 		t.Fatalf("unexpected STS response status=%d body=%s", response.StatusCode, body)
+	}
+
+	invalidForm := url.Values{"Action": {"AssumeRole"}, "Version": {"2011-06-15"}}
+	invalid, err := http.Post(server.URL+"/", "application/x-www-form-urlencoded", strings.NewReader(invalidForm.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidBody, _ := io.ReadAll(invalid.Body)
+	invalid.Body.Close()
+	if invalid.StatusCode != http.StatusBadRequest || !bytes.Contains(invalidBody, []byte("<Code>InvalidAction</Code>")) {
+		t.Fatalf("unexpected invalid STS response status=%d body=%s", invalid.StatusCode, invalidBody)
+	}
+	method, err := http.Get(server.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	method.Body.Close()
+	if method.StatusCode != http.StatusOK {
+		t.Fatalf("plain root GET should be handled by S3, status=%d", method.StatusCode)
+	}
+}
+
+func TestDynamoDBKeyProjectionAndOrderingHelpers(t *testing.T) {
+	pk, sk, other := "APP#one", "CHECK", "value"
+	table := state.DynamoTable{KeySchema: []state.DynamoKeySchemaElement{
+		{AttributeName: "pk", KeyType: "HASH"},
+		{AttributeName: "sk", KeyType: "RANGE"},
+	}}
+	item := state.DynamoItem{
+		"pk": {S: &pk}, "sk": {S: &sk}, "other": {S: &other},
+	}
+	key := dynamoPrimaryKey(table, item)
+	if len(key) != 2 || key["pk"].S == nil || *key["pk"].S != pk {
+		t.Fatalf("unexpected primary key: %+v", key)
+	}
+	if !dynamoKeysEqual(table, key, item) {
+		t.Fatal("equivalent DynamoDB keys did not compare equal")
+	}
+	different := "OTHER"
+	if dynamoKeysEqual(table, key, state.DynamoItem{"pk": {S: &pk}, "sk": {S: &different}}) {
+		t.Fatal("different DynamoDB keys compared equal")
+	}
+	items := []state.DynamoItem{{"pk": {S: &pk}}, {"pk": {S: &different}}}
+	reverseDynamoItems(items)
+	if items[0]["pk"].S == nil || *items[0]["pk"].S != different {
+		t.Fatalf("DynamoDB items were not reversed: %+v", items)
+	}
+	selected := selectDynamoAttributes(item, []string{"other", "missing"})
+	if len(selected) != 1 || selected["other"].S == nil || *selected["other"].S != other {
+		t.Fatalf("unexpected selected DynamoDB attributes: %+v", selected)
+	}
+	if !dynamoAttributeEqual(item["pk"], key["pk"]) || dynamoAttributeEqual(item["pk"], item["other"]) {
+		t.Fatal("DynamoDB attribute equality is incorrect")
 	}
 }
 
