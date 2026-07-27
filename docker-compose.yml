@@ -5,9 +5,9 @@ services:
     ports: ["4566:4566", "8085:8085"]
     volumes: ["fcp-data:/data"]
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:4566/_fcp/health"]
+      test: ["CMD", "fcp", "doctor", "--endpoint", "http://127.0.0.1:4566", "--gcp-endpoint", "127.0.0.1:8085", "--timeout", "1s", "--json"]
       interval: 2s
-      timeout: 1s
+      timeout: 2s
       retries: 20
 
   mysql:

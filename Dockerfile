@@ -14,5 +14,7 @@ USER fcp
 COPY --from=build /out/fcp /usr/local/bin/fcp
 EXPOSE 4566 8085
 VOLUME ["/data"]
+HEALTHCHECK --interval=2s --timeout=2s --start-period=2s --retries=20 \
+  CMD ["fcp", "doctor", "--endpoint", "http://127.0.0.1:4566", "--gcp-endpoint", "127.0.0.1:8085", "--timeout", "1s", "--json"]
 ENTRYPOINT ["fcp"]
 CMD ["--listen", "0.0.0.0:4566", "--gcp-listen", "0.0.0.0:8085", "--data-dir", "/data"]

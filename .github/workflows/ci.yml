@@ -27,8 +27,17 @@ jobs:
       - name: Test with coverage floor
         run: |
           profile="$RUNNER_TEMP/core-coverage.out"
+          cli_profile="$RUNNER_TEMP/cli-coverage.out"
+          server_profile="$RUNNER_TEMP/server-coverage.out"
+          state_profile="$RUNNER_TEMP/state-coverage.out"
           go test -count=1 -covermode=atomic -coverpkg=./... -coverprofile="$profile" ./...
-          ./scripts/check-coverage.sh "$profile" 72.0 "cross-package Go coverage"
+          go test -count=1 -covermode=atomic -coverprofile="$cli_profile" ./internal/cli
+          go test -count=1 -covermode=atomic -coverprofile="$server_profile" ./internal/server
+          go test -count=1 -covermode=atomic -coverprofile="$state_profile" ./internal/state
+          ./scripts/check-coverage.sh "$profile" 80.0 "cross-package Go coverage"
+          ./scripts/check-coverage.sh "$cli_profile" 80.0 "CLI package coverage"
+          ./scripts/check-coverage.sh "$server_profile" 80.0 "server package coverage"
+          ./scripts/check-coverage.sh "$state_profile" 85.0 "state package coverage"
       - run: go test -count=1 -race ./...
       - run: go vet ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
@@ -36,6 +45,23 @@ jobs:
       - run: node --test scripts/verify-pnpm-audit.test.mjs
       - run: docker compose config -q
       - run: docker build --build-arg VERSION=ci -t fcp:ci .
+      - name: Verify image healthcheck
+        run: |
+          container_id="$(docker run --detach fcp:ci)"
+          trap 'docker rm --force "$container_id" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$container_id")"
+            if [ "$health" = "healthy" ]; then
+              exit 0
+            fi
+            if [ "$health" = "unhealthy" ]; then
+              docker logs "$container_id"
+              exit 1
+            fi
+            sleep 1
+          done
+          docker logs "$container_id"
+          exit 1
       - name: Scan image for fixable high-severity vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -148,7 +174,7 @@ jobs:
           fi
           if [ -d "$FCP_CI_DIR/coverage" ] && [ -n "$(find "$FCP_CI_DIR/coverage" -type f -print -quit)" ]; then
             go tool covdata textfmt -i="$FCP_CI_DIR/coverage" -o="$FCP_CI_DIR/sdk-coverage.out"
-            ./scripts/check-coverage.sh "$FCP_CI_DIR/sdk-coverage.out" 40.0 "official SDK server-package coverage" || cleanup_status=$?
+            ./scripts/check-coverage.sh "$FCP_CI_DIR/sdk-coverage.out" 50.0 "official SDK server-package coverage" || cleanup_status=$?
           else
             echo "official SDK server coverage data is missing" >&2
             cleanup_status=1

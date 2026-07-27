@@ -304,7 +304,7 @@ func clientRealismDimension(services []compatibility.Service) Dimension {
 		),
 		criterion(
 			"executed_server_paths", "공식 SDK 서버 경로 계측", executionEarned, 5,
-			"CI가 공식 SDK를 매번 재실행하고 실제 서버 패키지 경로 커버리지 40%를 강제합니다.",
+			"CI가 공식 SDK를 매번 재실행하고 실제 서버 패키지 경로 커버리지 50%를 강제합니다.",
 			evidence(".github/workflows/ci.yml", "coverage-instrumented FCP와 --rerun-tasks"),
 			evidence("scripts/check-coverage.sh", "수치 하한 검증"),
 		),
@@ -347,8 +347,10 @@ func failureIsolationDimension() Dimension {
 			evidence(".github/workflows/ci.yml", "go test -race"),
 			evidence("internal/state/lock_test.go", "writer exclusion")),
 		criterion("negative_paths", "오류·부분 실패 계약", 1, 2, "주요 오류는 검증하지만 모든 PARTIAL 작업의 오류 조합을 exhaustive하게 검증하지는 않습니다.",
-			evidence("internal/server/server_test.go", "AWS 오류와 batch 부분 실패"),
-			evidence("internal/server/gcp_test.go", "GCP gRPC lifecycle과 오류")),
+			evidence("internal/server/api_edge_test.go", "AWS·Google REST 오류 매핑"),
+			evidence("internal/server/protocol_edge_test.go", "S3·GCS·Pub/Sub 프로토콜 경계"),
+			evidence("internal/state/dynamodb_operation_edge_test.go", "DynamoDB 조건·transaction 오류"),
+			evidence("internal/state/gcp_service_edge_test.go", "Secret Manager·KMS·IAM 상태 오류")),
 	)
 }
 
@@ -367,8 +369,10 @@ func securityDimension() Dimension {
 			evidence(".github/workflows/ci.yml", "immutable action references"),
 			evidence("Dockerfile", "digest-pinned base images"),
 			evidence("test-clients/jvm/backend/gradle.lockfile", "JVM dependency lock")),
-		criterion("local_boundary", "로컬 전용 경계", 2, 2, "기본 loopback과 명시된 인증 제외 범위로 오용을 제한합니다.",
+		criterion("local_boundary", "로컬 전용 경계", 2, 2, "기본 loopback, 외부 바인딩 경고와 실제 서비스 healthcheck로 오용과 오판을 제한합니다.",
 			evidence("cmd/fcp/main.go", "loopback default listeners"),
+			evidence("internal/runtime/runtime.go", "non-loopback authentication warning"),
+			evidence("Dockerfile", "HTTP와 GCP gRPC doctor healthcheck"),
 			evidence("README.md", "production exposure warning")),
 	)
 }

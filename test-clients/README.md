@@ -2,9 +2,9 @@
 
 이 디렉터리는 FCP 전용 SDK를 만들지 않고 공식 AWS·Google Cloud SDK를 그대로 FCP에 연결하는 회귀 테스트다.
 
-- JVM: Storage 2.68.0, Pub/Sub 1.140.1, KMS 2.96.0, Google Gen AI 1.58.0, Spring Cloud GCP BOM 7.4.6/Secret Manager 2.59.0, AWS DynamoDB·SQS·STS 2.33.9를 사용한다. FCM HTTP v1 요청 형식도 함께 검증한다.
-- Kotlin: 같은 JVM 공식 SDK로 Firestore와 Secret Manager를 검증한다.
-- JavaScript: AWS SDK v3.1092.0의 S3/SQS, `lib-storage` 멀티파트 업로드와 SQS DLQ redrive/FIFO ordering/deduplication, Storage 7.21.0/Pub/Sub 5.3.1을 사용하고, Metadata Server·Secret Manager REST·KMS REST 호출을 검증한다.
+- JVM: Storage 2.68.0, Pub/Sub 1.140.1, KMS 2.96.0, IAM Credentials 2.51.0, Google Gen AI 1.58.0, Spring Cloud GCP BOM 7.4.6/Firestore·Secret Manager 2.59.0, AWS DynamoDB·SQS·STS 2.33.9를 사용한다. CRUD·페이지네이션·트랜잭션·Pull/Ack·삭제 수명주기와 FCM HTTP v1 요청 형식을 함께 검증한다.
+- Kotlin: 같은 JVM 공식 SDK의 고수준 Firestore와 Secret Manager 호출을 검증한다.
+- JavaScript: AWS SDK v3.1092.0의 S3/SQS, `lib-storage` 멀티파트 업로드와 S3 알림, SQS DLQ redrive/FIFO ordering/deduplication, Storage 7.21.0/Pub/Sub 5.3.1을 사용하고, Metadata Server·Secret Manager REST·KMS REST 호출을 검증한다.
 
 FCP를 먼저 실행한 뒤 테스트한다.
 

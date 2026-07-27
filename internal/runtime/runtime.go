@@ -78,6 +78,9 @@ func Start(config Config) (*Runtime, error) {
 		logger:    config.Logger,
 	}
 
+	if !listenerIsLoopback(httpListener) || !listenerIsLoopback(gcpListener) {
+		fcpRuntime.logger.Printf("WARNING: FCP is listening beyond loopback and does not validate AWS credentials or SigV4; use only on a trusted local network")
+	}
 	fcpRuntime.logger.Printf("FCP GCP gRPC APIs listening on %s", fcpRuntime.GCPAddress())
 	fcpRuntime.logger.Printf("FCP %s listening on %s (data: %s, integrity: %s)", config.Version, fcpRuntime.HTTPEndpoint(), config.DataDir, config.IntegrityMode)
 	go func() {
@@ -91,6 +94,11 @@ func Start(config Config) (*Runtime, error) {
 		}
 	}()
 	return fcpRuntime, nil
+}
+
+func listenerIsLoopback(listener net.Listener) bool {
+	address, ok := listener.Addr().(*net.TCPAddr)
+	return ok && address.IP.IsLoopback()
 }
 
 func (r *Runtime) HTTPEndpoint() string {

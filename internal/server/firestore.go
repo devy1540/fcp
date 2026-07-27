@@ -600,9 +600,11 @@ func matchesFirestoreFilter(document *firestorepb.Document, filter *firestorepb.
 		value, exists := firestoreField(document, unary.GetField().GetFieldPath())
 		switch unary.GetOp() {
 		case firestorepb.StructuredQuery_UnaryFilter_IS_NULL:
-			return exists && value.GetNullValue() == structpb.NullValue_NULL_VALUE
+			_, isNull := value.GetValueType().(*firestorepb.Value_NullValue)
+			return exists && isNull && value.GetNullValue() == structpb.NullValue_NULL_VALUE
 		case firestorepb.StructuredQuery_UnaryFilter_IS_NOT_NULL:
-			return exists && value.GetValueType() != nil && value.GetNullValue() != structpb.NullValue_NULL_VALUE
+			_, isNull := value.GetValueType().(*firestorepb.Value_NullValue)
+			return exists && value.GetValueType() != nil && !isNull
 		default:
 			return false
 		}

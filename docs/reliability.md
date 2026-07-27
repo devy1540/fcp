@@ -61,7 +61,7 @@ Provider 점수는 해당 Provider의 API·클라이언트 증거만 다시 계�
 | 기준 | 점수 | 상태 | 계산·판단 근거 |
 |---|---:|---|---|
 | 공식 클라이언트·계약 증거 | 15/15 | FULL | SDK 검증 11개는 100%, HTTP 계약 검증 2개는 80%로 계산합니다. 증거: `docs/compatibility.md`, `test-clients/README.md` |
-| 공식 SDK 서버 경로 계측 | 5/5 | FULL | CI가 공식 SDK를 매번 재실행하고 실제 서버 패키지 경로 커버리지 40%를 강제합니다. 증거: `.github/workflows/ci.yml`, `scripts/check-coverage.sh` |
+| 공식 SDK 서버 경로 계측 | 5/5 | FULL | CI가 공식 SDK를 매번 재실행하고 실제 서버 패키지 경로 커버리지 50%를 강제합니다. 증거: `.github/workflows/ci.yml`, `scripts/check-coverage.sh` |
 
 ### 상태 내구성 · 20/20
 
@@ -81,7 +81,7 @@ Provider 점수는 해당 Provider의 API·클라이언트 증거만 다시 계�
 | 다중 작업 원자성 | 3/3 | FULL | DynamoDB transaction과 Firestore mutation이 중간 오류 때 부분 적용되지 않습니다. 증거: `internal/state/dynamodb_test.go`, `internal/state/gcp_services_test.go` |
 | 프로세스 중단 경계 | 3/3 | FULL | 스냅샷 복원의 journal-written부터 state-committed까지 복구합니다. 증거: `internal/state/snapshot_test.go` |
 | race detector와 writer lock | 3/3 | FULL | 전체 Go 패키지 race 검사와 data-dir lock 테스트를 CI에서 강제합니다. 증거: `.github/workflows/ci.yml`, `internal/state/lock_test.go` |
-| 오류·부분 실패 계약 | 1/2 | PARTIAL | 주요 오류는 검증하지만 모든 PARTIAL 작업의 오류 조합을 exhaustive하게 검증하지는 않습니다. 증거: `internal/server/server_test.go`, `internal/server/gcp_test.go` |
+| 오류·부분 실패 계약 | 1/2 | PARTIAL | 주요 오류는 검증하지만 모든 PARTIAL 작업의 오류 조합을 exhaustive하게 검증하지는 않습니다. 증거: `internal/server/api_edge_test.go`, `internal/server/protocol_edge_test.go`, `internal/state/dynamodb_operation_edge_test.go`, `internal/state/gcp_service_edge_test.go` |
 
 ### 보안·공급망 · 9/10
 
@@ -91,7 +91,7 @@ Provider 점수는 해당 Provider의 API·클라이언트 증거만 다시 계�
 | 클라이언트 의존성 audit | 1/2 | PARTIAL | 정확히 고정된 test-only moderate 예외 1건이 있어 부분 점수입니다. 증거: `test-clients/javascript/audit-policy.json`, `scripts/verify-pnpm-audit.mjs` |
 | 민감 데이터 비노출 | 2/2 | FULL | 대시보드와 CLI가 Secret·key·message·prompt payload를 표시하지 않습니다. 증거: `internal/server/dashboard_test.go`, `internal/cli/cli_test.go` |
 | 불변 빌드 입력 | 2/2 | FULL | Actions·base image를 digest로 고정하고 JVM·JavaScript lock을 검증합니다. 증거: `.github/workflows/ci.yml`, `Dockerfile`, `test-clients/jvm/backend/gradle.lockfile` |
-| 로컬 전용 경계 | 2/2 | FULL | 기본 loopback과 명시된 인증 제외 범위로 오용을 제한합니다. 증거: `cmd/fcp/main.go`, `README.md` |
+| 로컬 전용 경계 | 2/2 | FULL | 기본 loopback, 외부 바인딩 경고와 실제 서비스 healthcheck로 오용과 오판을 제한합니다. 증거: `cmd/fcp/main.go`, `internal/runtime/runtime.go`, `Dockerfile`, `README.md` |
 
 ### 릴리스 추적성 · 5/5
 

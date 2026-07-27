@@ -6,11 +6,14 @@ import {
   CopyObjectCommand,
   CreateBucketCommand,
   CreateMultipartUploadCommand,
+  GetBucketNotificationConfigurationCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListBucketsCommand,
   ListMultipartUploadsCommand,
   ListPartsCommand,
   ListObjectsV2Command,
+  PutBucketNotificationConfigurationCommand,
   PutObjectCommand,
   S3Client,
   UploadPartCommand,
@@ -70,6 +73,27 @@ test('AWS SDK v3 S3 works with FCP including Range, CopyObject and presigned GET
     listed.Contents.map((object) => object.Key).sort(),
     ['docs/copied.txt', 'docs/hello.txt'],
   )
+  const buckets = await client.send(new ListBucketsCommand({}))
+  assert.ok(buckets.Buckets.some((candidate) => candidate.Name === bucket))
+
+  await client.send(
+    new PutBucketNotificationConfigurationCommand({
+      Bucket: bucket,
+      NotificationConfiguration: {
+        QueueConfigurations: [
+          {
+            Id: 'notifications',
+            QueueArn: 'arn:aws:sqs:us-east-1:000000000000:notifications',
+            Events: ['s3:ObjectCreated:*'],
+            Filter: { Key: { FilterRules: [{ Name: 'prefix', Value: 'docs/' }] } },
+          },
+        ],
+      },
+    }),
+  )
+  const notification = await client.send(new GetBucketNotificationConfigurationCommand({ Bucket: bucket }))
+  assert.equal(notification.QueueConfigurations[0].Id, 'notifications')
+  assert.equal(notification.QueueConfigurations[0].Filter.Key.FilterRules[0].Value, 'docs/')
 
   const signedUrl = await getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: 'docs/copied.txt' }), { expiresIn: 60 })
   const signedResponse = await fetch(signedUrl)

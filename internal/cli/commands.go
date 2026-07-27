@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -10,12 +11,24 @@ import (
 	"time"
 
 	"github.com/devy1540/fcp/internal/reliability"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 const (
 	defaultEndpoint    = "http://127.0.0.1:4566"
 	defaultGCPEndpoint = "127.0.0.1:8085"
 )
+
+var requiredGCPGRPCServices = []string{
+	"google.pubsub.v1.Publisher",
+	"google.pubsub.v1.Subscriber",
+	"google.firestore.v1.Firestore",
+	"google.cloud.secretmanager.v1.SecretManagerService",
+	"google.cloud.kms.v1.KeyManagementService",
+	"google.iam.credentials.v1.IAMCredentials",
+}
 
 type checkResult struct {
 	Name    string `json:"name"`
@@ -60,11 +73,29 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	checks = append(checks, checkResult{Name: "dashboard-summary", OK: dashboardOK, Detail: checkDetail(err, fmt.Sprintf("%d services", dashboard.Summary.ServiceCount)), Latency: time.Since(started).Milliseconds()})
 
 	started = time.Now()
-	connection, dialErr := net.DialTimeout("tcp", *gcpEndpoint, *timeout)
-	if dialErr == nil {
+	connection, grpcErr := grpc.NewClient(*gcpEndpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	grpcStatus := ""
+	if grpcErr == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+		healthClient := grpc_health_v1.NewHealthClient(connection)
+		for _, service := range requiredGCPGRPCServices {
+			health, healthErr := healthClient.Check(ctx, &grpc_health_v1.HealthCheckRequest{Service: service})
+			if healthErr != nil {
+				grpcErr = fmt.Errorf("%s: %w", service, healthErr)
+				break
+			}
+			if health.GetStatus() != grpc_health_v1.HealthCheckResponse_SERVING {
+				grpcErr = fmt.Errorf("%s: gRPC health status is %s", service, health.GetStatus())
+				break
+			}
+		}
+		cancel()
 		_ = connection.Close()
+		if grpcErr == nil {
+			grpcStatus = fmt.Sprintf("%d FCP services SERVING", len(requiredGCPGRPCServices))
+		}
 	}
-	checks = append(checks, checkResult{Name: "gcp-grpc-port", OK: dialErr == nil, Detail: checkDetail(dialErr, *gcpEndpoint), Latency: time.Since(started).Milliseconds()})
+	checks = append(checks, checkResult{Name: "gcp-grpc-health", OK: grpcErr == nil, Detail: checkDetail(grpcErr, grpcStatus), Latency: time.Since(started).Milliseconds()})
 
 	ok := true
 	for _, check := range checks {
@@ -96,6 +127,9 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	timeout := flags.Duration("timeout", 2*time.Second, "request timeout")
 	_ = flags.Bool("json", true, "emit JSON")
 	if !parseFlags(flags, args, stderr) {
+		return 2
+	}
+	if !validRequestTimeout("status", *timeout, stderr) {
 		return 2
 	}
 	client, err := newAPIClient(*endpoint, *timeout)
@@ -136,6 +170,9 @@ func runResources(args []string, stdout, stderr io.Writer) int {
 	timeout := flags.Duration("timeout", 2*time.Second, "request timeout")
 	_ = flags.Bool("json", true, "emit JSON")
 	if !parseFlags(flags, args[1:], stderr) {
+		return 2
+	}
+	if !validRequestTimeout("resources", *timeout, stderr) {
 		return 2
 	}
 	*serviceID = strings.ToLower(strings.TrimSpace(*serviceID))
@@ -203,6 +240,9 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 	timeout := flags.Duration("timeout", 3*time.Second, "request timeout")
 	_ = flags.Bool("json", true, "emit JSON")
 	if !parseFlags(flags, args, stderr) {
+		return 2
+	}
+	if !validRequestTimeout("verify", *timeout, stderr) {
 		return 2
 	}
 	*serviceID = strings.ToLower(strings.TrimSpace(*serviceID))
@@ -286,6 +326,9 @@ func runReliability(args []string, stdout, stderr io.Writer) int {
 	if !parseFlags(flags, args, stderr) {
 		return 2
 	}
+	if !validRequestTimeout("reliability", *timeout, stderr) {
+		return 2
+	}
 	if *minimum < 0 || *minimum > 100 {
 		writeCLIError(stderr, "reliability", "invalid_minimum", "minimum must be between 0 and 100")
 		return 2
@@ -304,7 +347,8 @@ func runReliability(args []string, stdout, stderr io.Writer) int {
 		writeCLIError(stderr, "reliability", "invalid_response", err.Error())
 		return 1
 	}
-	ok := dashboard.Reliability.Score >= *minimum && len(dashboard.Reliability.AppliedCaps) == 0
+	runtimeReady := dashboard.Summary.ServiceCount > 0
+	ok := runtimeReady && dashboard.Reliability.Score >= *minimum && len(dashboard.Reliability.AppliedCaps) == 0
 	_ = writeJSON(stdout, map[string]any{
 		"schemaVersion": schemaVersion,
 		"command":       "reliability",
@@ -312,7 +356,7 @@ func runReliability(args []string, stdout, stderr io.Writer) int {
 		"endpoint":      client.endpoint,
 		"project":       dashboard.Project,
 		"minimum":       *minimum,
-		"runtimeReady":  dashboard.Summary.ServiceCount > 0,
+		"runtimeReady":  runtimeReady,
 		"assessment":    dashboard.Reliability,
 		"note":          "The score measures versioned local-emulator evidence, not the latest CI run or full AWS/GCP parity.",
 	})
@@ -320,6 +364,14 @@ func runReliability(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func validRequestTimeout(command string, timeout time.Duration, stderr io.Writer) bool {
+	if timeout <= 0 || timeout > 30*time.Second {
+		writeCLIError(stderr, command, "invalid_timeout", "timeout must be greater than 0 and at most 30s")
+		return false
+	}
+	return true
 }
 
 func checkDetail(err error, success string) string {

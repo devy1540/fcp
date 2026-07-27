@@ -15,6 +15,9 @@ import (
 	"github.com/devy1540/fcp/internal/profile"
 	"github.com/devy1540/fcp/internal/server"
 	"github.com/devy1540/fcp/internal/state"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 func TestDoctorStatusResourcesAndVerify(t *testing.T) {
@@ -32,10 +35,15 @@ func TestDoctorStatusResourcesAndVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer gcpListener.Close()
+	gcpServer := server.NewGCPGRPCServer(store)
+	go func() {
+		_ = gcpServer.Serve(gcpListener)
+	}()
+	defer gcpServer.Stop()
 
 	doctor := runCLI(t, "doctor", "--endpoint", httpServer.URL, "--gcp-endpoint", gcpListener.Addr().String(), "--json")
-	if doctor.exitCode != 0 || !doctor.output.OK || doctor.output.Command != "doctor" {
-		t.Fatalf("doctor exit=%d output=%+v stderr=%s", doctor.exitCode, doctor.output, doctor.stderr)
+	if doctor.exitCode != 0 || !doctor.output.OK || doctor.output.Command != "doctor" || !strings.Contains(doctor.stdout, `"gcp-grpc-health"`) || !strings.Contains(doctor.stdout, "6 FCP services SERVING") {
+		t.Fatalf("doctor exit=%d output=%+v stdout=%s stderr=%s", doctor.exitCode, doctor.output, doctor.stdout, doctor.stderr)
 	}
 
 	status := runCLI(t, "status", "--endpoint", httpServer.URL, "--json")
@@ -76,6 +84,33 @@ func TestDoctorReportsOfflineWithoutPanicking(t *testing.T) {
 	offline := runCLI(t, "doctor", "--endpoint", "http://127.0.0.1:1", "--gcp-endpoint", "127.0.0.1:1", "--timeout", "100ms")
 	if offline.exitCode != 1 || offline.output.OK || !strings.Contains(offline.stdout, `"http-health"`) {
 		t.Fatalf("offline doctor exit=%d stdout=%s stderr=%s", offline.exitCode, offline.stdout, offline.stderr)
+	}
+
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/_fcp/health" {
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"project":"fcp-local","summary":{"serviceCount":1}}`))
+	}))
+	defer httpServer.Close()
+	tcpOnly, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tcpOnly.Close()
+	genericGRPC := grpc.NewServer()
+	genericHealth := health.NewServer()
+	genericHealth.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	grpc_health_v1.RegisterHealthServer(genericGRPC, genericHealth)
+	go func() {
+		_ = genericGRPC.Serve(tcpOnly)
+	}()
+	defer genericGRPC.Stop()
+	falsePositive := runCLI(t, "doctor", "--endpoint", httpServer.URL, "--gcp-endpoint", tcpOnly.Addr().String(), "--timeout", "200ms")
+	if falsePositive.exitCode != 1 || falsePositive.output.OK || !strings.Contains(falsePositive.stdout, `"gcp-grpc-health"`) {
+		t.Fatalf("generic gRPC health endpoint passed FCP service checks: exit=%d stdout=%s stderr=%s", falsePositive.exitCode, falsePositive.stdout, falsePositive.stderr)
 	}
 }
 

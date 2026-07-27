@@ -37,6 +37,9 @@ type gcsUpload struct {
 }
 
 func (s *Server) handleGCS(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && strings.EqualFold(r.Header.Get("X-HTTP-Method-Override"), http.MethodPatch) {
+		r.Method = http.MethodPatch
+	}
 	path := r.URL.EscapedPath()
 	switch {
 	case path == "/storage/v1/b":

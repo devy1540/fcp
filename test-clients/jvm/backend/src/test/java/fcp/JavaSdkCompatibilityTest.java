@@ -12,13 +12,25 @@ import com.google.cloud.pubsub.v1.SubscriptionAdminClient;
 import com.google.cloud.pubsub.v1.SubscriptionAdminSettings;
 import com.google.cloud.pubsub.v1.TopicAdminClient;
 import com.google.cloud.pubsub.v1.TopicAdminSettings;
+import com.google.cloud.pubsub.v1.stub.GrpcPublisherStub;
+import com.google.cloud.pubsub.v1.stub.GrpcSubscriberStub;
+import com.google.cloud.pubsub.v1.stub.PublisherStub;
+import com.google.cloud.pubsub.v1.stub.PublisherStubSettings;
+import com.google.cloud.pubsub.v1.stub.SubscriberStub;
+import com.google.cloud.pubsub.v1.stub.SubscriberStubSettings;
 import com.google.cloud.storage.BlobId;
 import com.google.cloud.storage.BlobInfo;
 import com.google.cloud.storage.Storage;
 import com.google.cloud.storage.StorageOptions;
 import com.google.cloud.storage.PostPolicyV4;
+import com.google.pubsub.v1.AcknowledgeRequest;
 import com.google.protobuf.FieldMask;
 import com.google.pubsub.v1.DeadLetterPolicy;
+import com.google.pubsub.v1.ModifyAckDeadlineRequest;
+import com.google.pubsub.v1.ProjectName;
+import com.google.pubsub.v1.PublishRequest;
+import com.google.pubsub.v1.PubsubMessage;
+import com.google.pubsub.v1.PullRequest;
 import com.google.pubsub.v1.Subscription;
 import com.google.pubsub.v1.SubscriptionName;
 import com.google.pubsub.v1.Topic;
@@ -40,6 +52,8 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JavaSdkCompatibilityTest {
     private static final String PROJECT = "fcp-local";
@@ -58,6 +72,13 @@ class JavaSdkCompatibilityTest {
 		BlobId blobId = BlobId.of(bucket, "reports/result.txt");
         storage.create(BlobInfo.newBuilder(blobId).setContentType("text/plain").build(), body);
         assertArrayEquals(body, storage.readAllBytes(blobId));
+		assertNotNull(storage.get(bucket));
+		assertNotNull(storage.get(blobId));
+		assertTrue(storage.list().iterateAll().iterator().hasNext());
+		assertTrue(storage.list(bucket, Storage.BlobListOption.prefix("reports/"))
+				.iterateAll().iterator().hasNext());
+		storage.update(storage.get(blobId).toBuilder().setMetadata(Map.of("verified", "true")).build());
+		assertEquals("true", storage.get(blobId).getMetadata().get("verified"));
 
         ManagedChannel channel = ManagedChannelBuilder.forTarget(grpcEndpoint).usePlaintext().build();
         var transport = FixedTransportChannelProvider.create(GrpcTransportChannel.create(channel));
@@ -94,8 +115,12 @@ class JavaSdkCompatibilityTest {
 		}
         var topicSettings = TopicAdminSettings.newBuilder().setTransportChannelProvider(transport).setCredentialsProvider(NoCredentialsProvider.create()).build();
         var subscriptionSettings = SubscriptionAdminSettings.newBuilder().setTransportChannelProvider(transport).setCredentialsProvider(NoCredentialsProvider.create()).build();
+        var publisherSettings = PublisherStubSettings.newBuilder().setTransportChannelProvider(transport).setCredentialsProvider(NoCredentialsProvider.create()).build();
+        var subscriberSettings = SubscriberStubSettings.newBuilder().setTransportChannelProvider(transport).setCredentialsProvider(NoCredentialsProvider.create()).build();
         try (TopicAdminClient topics = TopicAdminClient.create(topicSettings);
-             SubscriptionAdminClient subscriptions = SubscriptionAdminClient.create(subscriptionSettings)) {
+             SubscriptionAdminClient subscriptions = SubscriptionAdminClient.create(subscriptionSettings);
+             PublisherStub publisher = GrpcPublisherStub.create(publisherSettings);
+             SubscriberStub subscriber = GrpcSubscriberStub.create(subscriberSettings)) {
 			TopicName topic = TopicName.of(PROJECT, "java-jobs-" + suffix);
 			TopicName dlq = TopicName.of(PROJECT, "java-jobs-dlq-" + suffix);
             topics.createTopic(Topic.newBuilder().setName(topic.toString()).build());
@@ -110,9 +135,42 @@ class JavaSdkCompatibilityTest {
             assertEquals(dlq.toString(), updated.getDeadLetterPolicy().getDeadLetterTopic());
             assertEquals(5, updated.getDeadLetterPolicy().getMaxDeliveryAttempts());
             assertEquals(topic.toString(), topics.getTopic(topic).getName());
+            assertTrue(topics.listTopics(ProjectName.of(PROJECT)).iterateAll().iterator().hasNext());
+            assertEquals(subscription.toString(),
+                    topics.listTopicSubscriptions(topic).iterateAll().iterator().next());
+            assertEquals(topic.toString(), subscriptions.getSubscription(subscription).getTopic());
+            assertTrue(subscriptions.listSubscriptions(ProjectName.of(PROJECT)).iterateAll().iterator().hasNext());
+
+            var published = publisher.publishCallable().call(PublishRequest.newBuilder()
+                    .setTopic(topic.toString())
+                    .addMessages(PubsubMessage.newBuilder().setData(ByteString.copyFromUtf8("official java pubsub")))
+                    .build());
+            assertEquals(1, published.getMessageIdsCount());
+            var pulled = subscriber.pullCallable().call(PullRequest.newBuilder()
+                    .setSubscription(subscription.toString())
+                    .setMaxMessages(1)
+                    .build());
+            assertEquals(1, pulled.getReceivedMessagesCount());
+            String ackId = pulled.getReceivedMessages(0).getAckId();
+            subscriber.modifyAckDeadlineCallable().call(ModifyAckDeadlineRequest.newBuilder()
+                    .setSubscription(subscription.toString())
+                    .addAckIds(ackId)
+                    .setAckDeadlineSeconds(30)
+                    .build());
+            subscriber.acknowledgeCallable().call(AcknowledgeRequest.newBuilder()
+                    .setSubscription(subscription.toString())
+                    .addAckIds(ackId)
+                    .build());
+
+            subscriptions.deleteSubscription(subscription);
+            topics.deleteTopic(topic);
+            topics.deleteTopic(dlq);
         } finally {
             channel.shutdownNow();
         }
+		assertTrue(storage.delete(blobId));
+		assertTrue(storage.delete(BlobId.of(bucket, "uploads/form.txt")));
+		assertTrue(storage.delete(bucket));
     }
 
     private static String required(String name) {

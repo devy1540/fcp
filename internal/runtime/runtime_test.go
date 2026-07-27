@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,5 +122,27 @@ func TestStartRejectsConcurrentRuntimeForDataDir(t *testing.T) {
 	}
 	if err := reopened.Close(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStartWarnsWhenListeningBeyondLoopback(t *testing.T) {
+	var logs bytes.Buffer
+	fcpRuntime, err := Start(Config{
+		Listen:    "0.0.0.0:0",
+		GCPListen: "0.0.0.0:0",
+		DataDir:   t.TempDir(),
+		Logger:    log.New(&logs, "", 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := fcpRuntime.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "WARNING: FCP is listening beyond loopback") ||
+		!strings.Contains(logs.String(), "does not validate AWS credentials or SigV4") {
+		t.Fatalf("missing non-loopback security warning: %s", logs.String())
 	}
 }

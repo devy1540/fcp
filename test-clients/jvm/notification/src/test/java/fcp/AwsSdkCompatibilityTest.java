@@ -2,6 +2,7 @@ package fcp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.util.List;
@@ -57,6 +58,13 @@ class AwsSdkCompatibilityTest {
         try (var sqs = sqsBuilder.build()) {
             String queueUrl = sqs.getQueueUrl(builder -> builder.queueName("notifications")).join().queueUrl();
             assertNotNull(sqs.getQueueUrl(builder -> builder.queueName("scheduled-jobs")).join().queueUrl());
+            String lifecycleQueue = sqs.createQueue(builder -> builder
+                    .queueName("java-lifecycle-" + System.nanoTime())).join().queueUrl();
+            assertTrue(sqs.listQueues().join().queueUrls().contains(lifecycleQueue));
+            assertNotNull(sqs.getQueueAttributes(builder -> builder
+                    .queueUrl(lifecycleQueue)
+                    .attributeNamesWithStrings("All")).join().attributes());
+            sqs.deleteQueue(builder -> builder.queueUrl(lifecycleQueue)).join();
             sqs.purgeQueue(builder -> builder.queueUrl(queueUrl)).join();
 
             sqs.sendMessage(builder -> builder
@@ -204,6 +212,14 @@ class AwsSdkCompatibilityTest {
                     .build());
             assertEquals(1L, table.query(QueryConditional.keyEqualTo(
                     Key.builder().partitionValue("APP#local").build())).items().stream().count());
+            assertTrue(dynamo.listTables().tableNames().contains(tableName));
+            assertEquals(1, dynamo.scan(builder -> builder.tableName(tableName)).count());
+            dynamo.deleteItem(builder -> builder
+                    .tableName(tableName)
+                    .key(Map.of(
+                            "pk", AttributeValue.builder().s("APP#local").build(),
+                            "sk", AttributeValue.builder().s("RESERVATION#1").build())));
+            assertEquals(0, dynamo.scan(builder -> builder.tableName(tableName)).count());
 
             assertEquals("000000000000", sts.getCallerIdentity().account());
             assertEquals("arn:aws:iam::000000000000:user/fcp-local", sts.getCallerIdentity().arn());

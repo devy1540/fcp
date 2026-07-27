@@ -23,6 +23,15 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+var gcpGRPCHealthServices = []string{
+	"google.pubsub.v1.Publisher",
+	"google.pubsub.v1.Subscriber",
+	"google.firestore.v1.Firestore",
+	"google.cloud.secretmanager.v1.SecretManagerService",
+	"google.cloud.kms.v1.KeyManagementService",
+	"google.iam.credentials.v1.IAMCredentials",
+}
+
 type pubSubServer struct {
 	pubsubpb.UnimplementedPublisherServer
 	pubsubpb.UnimplementedSubscriberServer
@@ -48,6 +57,9 @@ func NewGCPGRPCServer(store *state.Store) *grpc.Server {
 	credentialspb.RegisterIAMCredentialsServer(grpcServer, newIAMCredentialsServer(store))
 	healthServer := health.NewServer()
 	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	for _, service := range gcpGRPCHealthServices {
+		healthServer.SetServingStatus(service, grpc_health_v1.HealthCheckResponse_SERVING)
+	}
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
 	return grpcServer
 }

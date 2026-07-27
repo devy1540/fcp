@@ -12,6 +12,7 @@ import (
 
 	"cloud.google.com/go/kms/apiv1/kmspb"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+	rpccode "google.golang.org/genproto/googleapis/rpc/code"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -244,5 +245,5 @@ func writeGoogleGRPCError(w http.ResponseWriter, err error) {
 	case codes.Unimplemented:
 		httpStatus = http.StatusNotImplemented
 	}
-	writeGoogleAPIError(w, httpStatus, grpcStatus.Code().String(), grpcStatus.Message())
+	writeGoogleAPIError(w, httpStatus, rpccode.Code(grpcStatus.Code()).String(), grpcStatus.Message())
 }

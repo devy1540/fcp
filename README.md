@@ -132,7 +132,7 @@ flowchart LR
 
 | 명령 | 용도 |
 |---|---|
-| `fcp doctor --json` | HTTP, 대시보드, GCP gRPC 포트 진단 |
+| `fcp doctor --json` | HTTP, 대시보드, GCP gRPC Health RPC 진단 |
 | `fcp status --json` | 프로젝트와 서비스별 리소스 수 조회 |
 | `fcp env <aws\|gcp\|all> --format shell` | Provider별 로컬 환경 변수 생성 |
 | `fcp resources list --service <id> --json` | 비민감 리소스 메타데이터 검색 및 페이지 조회 |
@@ -291,7 +291,7 @@ FCP는 “응답한다”와 “호환성이 검증됐다”를 구분합니다.
 make verify
 ```
 
-CI는 `strict` 무결성 모드로 공식 SDK 테스트를 실행합니다. Go 테스트는 전체 패키지를 계측해 72%를, Java·Kotlin·JavaScript 공식 SDK가 실제 서버 패키지(`cmd/fcp`, `profile`, `runtime`, `server`, `state`)에서 실행한 경로는 40%를 최소 하한으로 강제합니다. 커버리지는 신뢰도 점수가 아니라 테스트가 사라지는 회귀를 막는 하한선이며, SDK 테스트는 Gradle 캐시와 무관하게 매번 다시 실행합니다.
+CI는 `strict` 무결성 모드로 공식 SDK 테스트를 실행합니다. Go 테스트는 전체 패키지 80%, `cli` 80%, `server` 80%, `state` 85%를 각각 최소 하한으로 강제합니다. Java·Kotlin·JavaScript 공식 SDK가 계측 바이너리의 실제 서버 패키지(`cmd/fcp`, `profile`, `runtime`, `server`, `state`)에서 실행한 경로는 50%를 하한으로 둡니다. 커버리지는 신뢰도 점수가 아니라 테스트가 사라지는 회귀를 막는 하한선이며, SDK 테스트는 Gradle 캐시와 무관하게 매번 다시 실행합니다.
 
 호출 경로와 가져온 Go 패키지의 알려진 취약점, 컨테이너의 수정 가능한 HIGH/CRITICAL 취약점도 실패 처리합니다. 외부 GitHub Actions와 Docker 베이스 이미지는 불변 커밋·다이제스트로 고정하고, JVM 공식 SDK 테스트는 dependency lockfile을 사용합니다. JavaScript audit 예외는 [정확한 패키지·경로·버전과 만료일](test-clients/javascript/audit-policy.json)이 일치할 때만 허용하며 HIGH/CRITICAL 예외는 금지합니다. Dependabot이 Go·Actions·Docker·npm·Gradle 갱신을 매주 확인합니다.
 
@@ -313,6 +313,8 @@ docker run --rm \
 ```bash
 docker run --rm -p 4566:4566 -p 8085:8085 ghcr.io/devy1540/fcp:latest
 ```
+
+이미지와 Compose healthcheck는 `fcp doctor`로 HTTP·대시보드와 6개 GCP gRPC 서비스의 실제 Health RPC를 함께 확인합니다. loopback 밖에 바인딩하면 FCP가 자격 증명과 SigV4를 검증하지 않는다는 경고를 시작 로그에 남깁니다.
 
 ## 보안과 제한
 
