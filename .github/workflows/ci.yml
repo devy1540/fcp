@@ -94,7 +94,7 @@ jobs:
           node-version: 24
       - name: Install pnpm
         run: npm install --global pnpm@11.16.0
-      - uses: gradle/actions/setup-gradle@90ddb51e90a5fd9ba75f40cf85156b7b41bf76a3 # v6
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
         with:
           gradle-version: 9.2.0
       - name: Start FCP with the demo profile
